@@ -102,6 +102,7 @@ static int video_miniz(const void* buf, int len, void* user)
 void a12int_decode_vbuffer(
 	struct a12_state* S, struct video_frame* cvf, struct arcan_shmif_cont* cont)
 {
+	debug_print(1, "decode vbuffer: pp: %d", cvf->postprocess);
 	if (cvf->postprocess == POSTPROCESS_VIDEO_MINIZ ||
 			cvf->postprocess == POSTPROCESS_VIDEO_DMINIZ){
 		size_t inbuf_pos = cvf->inbuf_pos;
@@ -113,8 +114,58 @@ void a12int_decode_vbuffer(
 		}
 		return;
 	}
+#ifdef WANT_H264_DEC
+	else if (cvf->postprocess == POSTPROCESS_VIDEO_H264){
+/* just keep it around after first time of use */
+		static const AVCodec* codec;
+		if (!codec){
+			codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+			if (!codec){
+				debug_print(1, "couldn't find h264 decoder");
+/* missing: send a message to request that we don't get more h264 frames */
+				goto out_h264;
+			}
+		}
+
+/* since these are stateful, we need to tie them to the channel dynamically */
+		if (!cvf->ffmpeg.context){
+			cvf->ffmpeg.context = avcodec_alloc_context3(codec);
+			if (!cvf->ffmpeg.context){
+				debug_print(1, "couldn't setup h264 codec context");
+				goto out_h264;
+			}
+
+			cvf->ffmpeg.parser = av_parser_init(codec->id);
+			if (!cvf->ffmpeg.parser){
+				debug_print(1, "couldn't find h264 parser");
+/* missing: send a message to request that we don't get more h264 frames */
+				goto out_h264;
+			}
+
+			cvf->ffmpeg.packet = av_packet_alloc();
+			if (!cvf->ffmpeg.packet){
+				debug_print(1, "couldn't alloca packet for h264 decode");
+				av_parser_close(cvf->ffmpeg.parser);
+				cvf->ffmpeg.parser = NULL;
+				goto out_h264;
+			}
+		}
+
+		av_parser_parse2(cvf->ffmpeg.parser, codec,
+			&cvf->ffmpeg.packet->data, &cvf->ffmpeg.packet->size,
+			cvf->inbuf, cvf->inbuf_pos, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0
+		);
+
+out_h264:
+		free(cvf->inbuf);
+		cvf->carry = 0;
+	}
+#endif
 
 	debug_print(1, "unhandled unpack method %d", cvf->postprocess);
+/* NOTE: should we send something about an undesired frame format here as
+ * well in order to let the source re-send the frame in another format?
+ * that could offset the need to 'negotiate' */
 }
 
 void a12int_unpack_vbuffer(struct a12_state* S,

@@ -448,3 +448,135 @@ void a12int_encode_dpng(PACK_ARGS)
 
 	free(cres.out_buf);
 }
+
+#ifdef WANT_H264_ENC
+void drop_h264(struct a12_state* S, int chid)
+{
+	if (!S->channels[chid].h264.encoder)
+		return;
+
+	debug_print(1, "dropping h264 context");
+	S->channels[chid].h264.encoder = NULL;
+	x264_picture_clean(&S->channels[chid].h264.pict_in);
+
+}
+
+void open_h264(struct a12_state* S, struct shmifsrv_vbuffer* vb, int chid)
+{
+	x264_param_t param;
+	x264_param_default_preset(&param, "veryfast", "zerolatency");
+
+/* non 'default' parameters */
+	param.i_width = vb->w;
+	param.i_height = vb->h;
+	param.i_csp = X264_CSP_BGRA;
+	param.b_vfr_input = 1;
+	param.b_repeat_headers = 1;
+
+/*
+ * This will not suffice for endianness reasons, need to find a
+ * way in x264 to avoid a full repack stage based on probes for
+ * SHMIF_RGBA output variants. If we pay that price, then might
+ * as well switch to YUV420p or similar formats here.
+ */
+	if (x264_picture_alloc(
+		&S->channels[chid].h264.pict_in, X264_CSP_BGRA, vb->w, vb->h)){
+		return;
+	}
+
+	S->channels[chid].h264.encoder = x264_encoder_open(&param);
+	if (!S->channels[chid].h264.encoder){
+		x264_picture_clean(&S->channels[chid].h264.pict_in);
+		return;
+	}
+
+	S->channels[chid].h264.w = vb->w;
+	S->channels[chid].h264.h = vb->h;
+
+	debug_print(1, "h264 context built");
+}
+#endif
+
+void a12int_encode_h264(PACK_ARGS)
+{
+/* A major complication here is that there is a requirement for the
+ * source- width and height to be evenly divisible by 2. The option
+ * then is to pad, or the cheap fallback of switching codec. Let us
+ * go with the cheap one for now. */
+#ifdef WANT_H264_ENC
+	if (vb->w % 2 != 0 || vb->h % 2 != 0){
+		drop_h264(S, chid);
+		a12int_encode_dpng(FWD_ARGS);
+		return;
+	}
+/* On resize, rebuild the encoder stage and send new headers etc. */
+	else if (
+		vb->w != S->channels[chid].h264.w ||
+		vb->h != S->channels[chid].h264.h){
+		S->channels[chid].h264.failed = false;
+		drop_h264(S, chid);
+	}
+
+/* If we don't have an encoder (first time or reset due to resize),
+ * try to configure, and if the configuration fails (i.e. still no
+ * encoder set) fallback to DPNG and only try again on new size. */
+	if (!S->channels[chid].h264.encoder){
+		open_h264(S, vb, chid);
+	}
+
+	if (!S->channels[chid].h264.encoder){
+		debug_print(1, "couldn't setup h264 encoder");
+		S->channels[chid].h264.failed = true;
+		a12int_encode_dpng(FWD_ARGS);
+		return;
+	}
+
+	x264_nal_t* nals;
+	int i_nals;
+	S->channels[chid].h264.pict_in.i_pts++;
+	ssize_t frame_sz = x264_encoder_encode(
+		S->channels[chid].h264.encoder, &nals, &i_nals,
+		&S->channels[chid].h264.pict_in, &S->channels[chid].h264.pict_out);
+
+/* the encode stage might require buffering based on profile */
+	if (frame_sz <= 0)
+		return;
+
+/* doesn't seem to be a way for us to flag which parts of the frame are
+ * dirty? this seems like a big waste for our use */
+	uint8_t hdr_buf[CONTROL_PACKET_SIZE];
+	a12int_vframehdr_build(hdr_buf, S->last_seen_seqnr, chid,
+		POSTPROCESS_VIDEO_H264, 0, vb->w, vb->h, vb->w, vb->h,
+		0, 0, frame_sz, vb->w * vb->h * 4, 1
+	);
+
+	a12int_append_out(S,
+		STATE_CONTROL_PACKET, hdr_buf, CONTROL_PACKET_SIZE, NULL, 0);
+
+	chunk_pack(S, STATE_VIDEO_PACKET, nals[0].p_payload, frame_sz, chunk_sz);
+	debug_print(2, "h264 frame: %zd", frame_sz);
+
+/*	while (x264_encoder_delayed_frames(S->channels[chid].h264.encoder)){
+		frame_sz = x264_encoder_encode(
+			S->channels[chid].h264.encoder, &nals, &i_nals,
+			&S->channels[chid].h264.pict_in, &S->channels[chid].h264.pict_out
+		);
+		if (frame_sz <= 0)
+			continue;
+
+		a12int_vframehdr_build(hdr_buf, S->last_seen_seqnr, chid,
+			POSTPROCESS_VIDEO_H264, 0, vb->w, vb->h, vb->w, vb->h,
+			frame_sz, vb->w, vb->h, vb->w * vb->h * 4, 1
+		);
+
+		a12int_append_out(S,
+			STATE_CONTROL_PACKET, hdr_buf, CONTROL_PACKET_SIZE, NULL, 0);
+
+		chunk_pack(S, STATE_VIDEO_PACKET, nals[0].p_payload, frame_sz, chunk_sz);
+		debug_print(2, "h264 delayed frame: %zd", frame_sz);
+	} */
+
+#else
+	a12int_encode_dpng(FWD_ARGS);
+#endif
+}

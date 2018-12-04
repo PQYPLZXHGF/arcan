@@ -682,21 +682,25 @@ a12_channel_vframe(struct a12_state* S,
 	debug_print(2, "out vframe: %zu*%zu @%zu,%zu+%zu,%zu", vb->w, vb->h, w, h, x, y);
 #define argstr S, vb, opts, x, y, w, h, chunk_sz, chid
 
-	if (opts.method == VFRAME_METHOD_RAW_RGB565){
+	switch(opts.method){
+	case VFRAME_METHOD_RAW_RGB565:
 		a12int_encode_rgb565(argstr);
-	}
-	else if (opts.method == VFRAME_METHOD_NORMAL){
+	break;
+	case VFRAME_METHOD_NORMAL:
 		if (vb->flags.ignore_alpha)
 			a12int_encode_rgb(argstr);
 		else
 			a12int_encode_rgba(argstr);
-	}
-	else if (opts.method == VFRAME_METHOD_RAW_NOALPHA){
+	break;
+	case VFRAME_METHOD_RAW_NOALPHA:
 		a12int_encode_rgb(argstr);
-	}
-/* DPNG actually have two header types, one for an I frame and one for P frames */
-	else if (opts.method == VFRAME_METHOD_DPNG){
+	break;
+	case VFRAME_METHOD_DPNG:
 		a12int_encode_dpng(argstr);
+	break;
+	case VFRAME_METHOD_H264:
+		a12int_encode_h264(argstr);
+	break;
 	}
 }
 

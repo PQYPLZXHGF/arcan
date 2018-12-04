@@ -465,6 +465,8 @@ int main(int argc, char** argv)
 				vframe_method = VFRAME_METHOD_RAW_RGB565;
 			else if (strcmp(argv[i], "dpng") == 0)
 				vframe_method = VFRAME_METHOD_DPNG;
+			else if (strcmp(argv[i], "h264") == 0)
+				vframe_method = VFRAME_METHOD_H264;
 			else
 				return show_usage(argv[i], "unknown video compression method requested");
 		}

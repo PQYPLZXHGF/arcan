@@ -1,5 +1,6 @@
 PROJECT( arcan-net )
 cmake_minimum_required(VERSION 3.0.4 FATAL_ERROR)
+include(FindPkgConfig)
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
 	add_definitions(-D_DEBUG)
@@ -22,7 +23,32 @@ add_definitions(
 	-fPIC
 )
 
+SET(LIBRARIES
+	m
+	pthread
+	${ARCAN_SHMIF_LIBRARY}
+	${ARCAN_SHMIF_SERVER_LIBRARY}
+)
+
 find_package(Sanitizers REQUIRED)
+find_package(FFMPEG REQUIRED QUIET)
+
+pkg_check_modules(X264 x264)
+if (X264_LIBRARIES)
+	message("libx264 support found, H264 encode enabled")
+	add_definitions(-DWANT_H264_ENC)
+	include_directories(${X264_INCLUDEDIR})
+	list(APPEND LIBRARIES ${X264_LIBRARIES})
+else()
+	message("libx264 support NOT found, disabling")
+endif()
+
+if (FFMPEG_FOUND)
+	message("ffmpeg support found, H264 decode enabled")
+	add_definitions(-DWANT_H264_DEC)
+	list(APPEND LIBRARIES ${FFMPEG_LIBRARIES})
+	include_directories(${FFMPEG_INCLUDE_DIRS})
+endif()
 
 include(ExternalProject)
 
@@ -49,13 +75,6 @@ include(ExternalProject)
 include_directories(
 	${ARCAN_SHMIF_INCLUDE_DIR}
 	#	${CMAKE_CURRENT_BINARY_DIR}/udt/src
-)
-
-SET(LIBRARIES
-	m
-	pthread
-	${ARCAN_SHMIF_LIBRARY}
-	${ARCAN_SHMIF_SERVER_LIBRARY}
 )
 
 set(SOURCES

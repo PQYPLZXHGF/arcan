@@ -14,8 +14,21 @@
 
 #include "miniz/miniz.h"
 
-#ifdef WANT_X264
+/*
+ * Need these optional due to patents
+ */
+#ifdef WANT_H264_ENC
 #include <x264.h>
+#endif
+
+#ifdef WANT_H264_DEC
+#include <libavcodec/avcodec.h>
+#include <libavcodec/version.h>
+#include <libavutil/opt.h>
+#include <libavutil/imgutils.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
 #endif
 
 #define MAC_BLOCK_SZ 16
@@ -72,11 +85,11 @@ enum control_commands {
 
 enum {
 	POSTPROCESS_VIDEO_RGBA = 0,
-	POSTPROCESS_VIDEO_RGB,
-	POSTPROCESS_VIDEO_RGB565,
-	POSTPROCESS_VIDEO_DMINIZ,
-	POSTPROCESS_VIDEO_MINIZ,
-	POSTPROCESS_VIDEO_H264
+	POSTPROCESS_VIDEO_RGB = 1,
+	POSTPROCESS_VIDEO_RGB565 = 2,
+	POSTPROCESS_VIDEO_DMINIZ = 3,
+	POSTPROCESS_VIDEO_MINIZ = 4,
+	POSTPROCESS_VIDEO_H264 = 5
 };
 
 size_t a12int_header_size(int type);
@@ -101,6 +114,14 @@ struct video_frame {
 
 	uint8_t pxbuf[4];
 	uint8_t carry;
+
+#ifdef WANT_H264_DEC
+	struct {
+		AVCodecParserContext* parser;
+		AVCodecContext* context;
+		AVPacket* packet;
+	} ffmpeg;
+#endif
 
 	/* bytes left on current row for raw-dec */
 };
@@ -132,11 +153,13 @@ struct a12_state {
 		struct shmifsrv_vbuffer acc;
 		union {
 			uint8_t* compression;
-#ifdef WANT_X264
+#ifdef WANT_H264_ENC
 			struct {
 				x264_t* encoder;
 				x264_picture_t pict_in, pict_out;
-			} x264;
+				size_t w, h;
+				bool failed;
+			} h264;
 #endif
 	};
 	} channels[256];

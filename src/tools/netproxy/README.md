@@ -62,24 +62,28 @@ Milestone 1 - basic features (0.5.x)
 - [x] Control
 - [x] Netpipe working
 - [x] Uncompressed Video / Video delta
-  -  [ ] Accelerated video sources
-	-  [ ] Output segments
 - [ ] Uncompressed Audio / Audio delta
 - [x] Compressed Video
-	-  [ ] x264
+	-  [x] x264
 	-  [x] xor-PNG
 - [ ] Raw binary descriptor transfers
 - [ ] Subsegments
+- [ ] Client multiplexing
+- [ ] Socket support (disable Nagle)
+- [ ] Basic authentication
+- [ ] Cipher
 
 Milestone 2 - closer to useful (0.6.x)
 
-- [ ] Better / source specific compression
+- [ ] Compression Heuristics for binary transfers
+- [ ] Quad-tree for DPNG
+- [ ] "MJPG" mode over DPNG
 - [ ] TUI- text channel
 - [ ] A / V / E interleaving
 - [ ] Progressive encoding
 - [ ] Accelerated encoding of gpu-handles
 - [ ] Traffic monitoring tools
-- [ ] UDT based carrier (full- proxy client)
+- [ ] Output segments
 
 Milestone 3 - big stretch (0.6.x)
 
@@ -87,12 +91,14 @@ Milestone 3 - big stretch (0.6.x)
 - [ ] Stream-ciper
 - [ ] 'ALT' arcan-lwa interfacing
 - [ ] ZSTD
+- [ ] Subprotocols (vobj, gamma, ...)
 - [ ] Open3DGC
 - [ ] Congestion control / dynamic encoding parameters
 - [ ] Side-channel Resilience
-- [ ] Local discovery Mechanism
+- [ ] Local discovery Mechanism (pluggable)
 - [ ] Merge into arcan-net
 - [ ] Special provisions for agp/alt channels
+- [ ] UDT based carrier (full- proxy client)
 - [ ] Clean-up, RFC level documentation
 
 # Security/Safety
@@ -130,6 +136,12 @@ saturating other events.
 "a12\_channel\_vframe" is probably the best example of providing output and
 sending, since it needs to treat many options, large data and different
 encoding schemes.
+
+# Notes
+
+A subtle thing that isn't correctly implemented at the moment is the flag
+translation for dirty regions, the origo\_ll option, and alpha component
+status.
 
 # Protocol
 
@@ -200,6 +212,8 @@ drifting, show a user notice and destroy the channel.
 
 ### command = 0, hello
 First message sent of the channel, it's rude not to say hi.
+- [0] version major (match the shmif- version until we have a finished protocol)
+- [1] version minor (match the shmif- version until we have a finished protocol)
 
 ### command = 1, shutdown
 The nice way of saying that everything is about to be shut down, remaining
@@ -293,6 +307,34 @@ model itself is finalized, it will be added to the documentation here.
 - channel-id : uint8
 - stream-id : uint32
 - length : uint32
+
+# Compressions and Codecs
+
+To get audio/video/data transfers bandwidth efficient, the contents must be
+compressed in some way. This is a rats nest of issues, ranging from patents
+in less civilized parts of the world to dependency hell.
+
+The current approach to 'feature negotiation' is simply for the sender to try
+the best one it can, and fall back to inefficient safe-defaults if the
+recipient returns a remark of the frame as unsupported.
+
+# Event Model
+
+The more complicated interactions come from events and their ordering,
+especially when trying to interleave or deal with data carrying events.
+
+The only stage this 'should' require special treatment is for font transfers
+for client side text rendering which typically only happen before activation.
+
+For other kinds of transfers, state and clipboard, they act as a mask/block
+for certain input events.
+
+Input events are the next complication in line as any input event that relies
+on a 'press-hold-release' pattern interpreted on the other end may be held for
+too long, or with clients that deal with raw codes and repeats, cause
+extraneous key-repeats or 'shadow releases'. To minimize the harm here, a more
+complex state machine will be needed that tries to determine if the channel
+blocks or not by relying on a ping-stream.
 
 # Licenses
 
