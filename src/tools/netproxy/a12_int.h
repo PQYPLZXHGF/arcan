@@ -120,6 +120,7 @@ struct video_frame {
 		AVCodecParserContext* parser;
 		AVCodecContext* context;
 		AVPacket* packet;
+		AVFrame* frame;
 	} ffmpeg;
 #endif
 

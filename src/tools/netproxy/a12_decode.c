@@ -142,19 +142,55 @@ void a12int_decode_vbuffer(
 				goto out_h264;
 			}
 
+			cvf->ffmpeg.frame = av_frame_alloc();
+			if (!cvf->ffmpeg.frame){
+				debug_print(1, "couldn't alloc frame for h264 decode");
+				av_parser_close(cvf->ffmpeg.parser);
+				goto out_h264;
+			}
+
 			cvf->ffmpeg.packet = av_packet_alloc();
 			if (!cvf->ffmpeg.packet){
-				debug_print(1, "couldn't alloca packet for h264 decode");
+				debug_print(1, "couldn't alloc packet for h264 decode");
 				av_parser_close(cvf->ffmpeg.parser);
+				av_frame_free(&cvf->ffmpeg.frame);
 				cvf->ffmpeg.parser = NULL;
+				cvf->ffmpeg.frame = NULL;
 				goto out_h264;
 			}
 		}
 
-		av_parser_parse2(cvf->ffmpeg.parser, codec,
+		av_parser_parse2(cvf->ffmpeg.parser, cvf->ffmpeg.context,
 			&cvf->ffmpeg.packet->data, &cvf->ffmpeg.packet->size,
 			cvf->inbuf, cvf->inbuf_pos, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0
 		);
+
+/* ffmpeg packet buffering is similar to our own, but it seems slightly risky
+ * to assume that and try to sidestep that layer - though it should be tried at
+ * some point */
+		if (cvf->ffmpeg.packet->size){
+			int ret = avcodec_send_packet(cvf->ffmpeg.context, cvf->ffmpeg.packet);
+
+			while (ret >= 0){
+				ret = avcodec_receive_frame(cvf->ffmpeg.context, cvf->ffmpeg.frame);
+				if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+					goto out_h264;
+
+/* Quite possible that we should actually cache this context as well, but it
+ * has different behavior to the rest due to resize. Since this all turns
+ * ffmpeg into a dependency, maybe it belongs in the vframe setup on resize. */
+				struct SwsContext* scaler =
+					sws_getContext(cvf->w, cvf->h, cvf->ffmpeg.frame->format,
+						cvf->w, cvf->h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
+
+				sws_scale(scaler,
+					(const uint8_t* const*) cvf->ffmpeg.frame->data,
+					cvf->ffmpeg.frame->linesize, 0, cvf->h,
+					cont->vidb, cont->stride);
+
+				sws_destroyContext(scaler);
+			}
+		}
 
 out_h264:
 		free(cvf->inbuf);
