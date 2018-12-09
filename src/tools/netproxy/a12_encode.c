@@ -450,50 +450,116 @@ void a12int_encode_dpng(PACK_ARGS)
 }
 
 #ifdef WANT_H264_ENC
-void drop_h264(struct a12_state* S, int chid)
+void drop_videnc(struct a12_state* S, int chid, bool failed)
 {
-	if (!S->channels[chid].h264.encoder)
+	if (!S->channels[chid].videnc.encoder)
 		return;
+
+/* dealloc context */
+	S->channels[chid].videnc.encoder = NULL;
+	S->channels[chid].videnc.failed = failed;
+
+/* FIXME: free context and packet */
+
+	if (S->channels[chid].videnc.scaler){
+		sws_freeContext(S->channels[chid].videnc.scaler);
+		S->channels[chid].videnc.scaler = NULL;
+	}
+
+	if (S->channels[chid].videnc.frame){
+		av_frame_free(&S->channels[chid].videnc.frame);
+	}
 
 	debug_print(1, "dropping h264 context");
-	S->channels[chid].h264.encoder = NULL;
-	x264_picture_clean(&S->channels[chid].h264.pict_in);
-
 }
 
-void open_h264(struct a12_state* S, struct shmifsrv_vbuffer* vb, int chid)
+static bool open_videnc(struct a12_state* S,
+	struct shmifsrv_vbuffer* vb, int chid, int codecid)
 {
-	x264_param_t param;
-	x264_param_default_preset(&param, "veryfast", "zerolatency");
+	AVCodec* codec = S->channels[chid].videnc.codec;
+	AVFrame* frame = NULL;
+	AVPacket* packet = NULL;
+	struct SwsContext* scaler = NULL;
 
-/* non 'default' parameters */
-	param.i_width = vb->w;
-	param.i_height = vb->h;
-	param.i_csp = X264_CSP_BGRA;
-	param.b_vfr_input = 1;
-	param.b_repeat_headers = 1;
+	if (!codec){
+		codec = avcodec_find_encoder(codecid);
+		if (!codec)
+			return false;
+		S->channels[chid].videnc.codec = codec;
+	}
 
 /*
- * This will not suffice for endianness reasons, need to find a
- * way in x264 to avoid a full repack stage based on probes for
- * SHMIF_RGBA output variants. If we pay that price, then might
- * as well switch to YUV420p or similar formats here.
+ * prior to this, we have a safeguard if the input resolution isn't % 2 so
+ * this requirement for ffmpeg holds
  */
-	if (x264_picture_alloc(
-		&S->channels[chid].h264.pict_in, X264_CSP_BGRA, vb->w, vb->h)){
-		return;
+	AVCodecContext* encoder = avcodec_alloc_context3(codec);
+	S->channels[chid].videnc.encoder = encoder;
+	S->channels[chid].videnc.w = vb->w;
+	S->channels[chid].videnc.h = vb->h;
+
+/* should really check the channel segment type and pick parameters on that */
+	if (codecid == AV_CODEC_ID_H264){
+		av_opt_set(encoder->priv_data, "preset", "veryfast", 0);
+		av_opt_set(encoder->priv_data, "tune", "zerolatency", 0);
 	}
 
-	S->channels[chid].h264.encoder = x264_encoder_open(&param);
-	if (!S->channels[chid].h264.encoder){
-		x264_picture_clean(&S->channels[chid].h264.pict_in);
-		return;
-	}
+/* should expose a lot more options passable from the transport layer here,
+ * but that's something for the 0.6 series */
+	encoder->bit_rate = 400000;
+	encoder->width = vb->w;
+	encoder->height = vb->h;
 
-	S->channels[chid].h264.w = vb->w;
-	S->channels[chid].h264.h = vb->h;
+/* uncertain about the level of VFR support, but that's really what we need
+ * and then possibly abuse the PTS field to prebuffer frames in the context
+ * of video playback and so on. */
+	encoder->time_base = (AVRational){1, 25};
+	encoder->framerate = (AVRational){25, 1};
+	encoder->gop_size = 10;
+	encoder->max_b_frames = 1;
+	encoder->pix_fmt = AV_PIX_FMT_YUV420P;
 
-	debug_print(1, "h264 context built");
+	frame = av_frame_alloc();
+	if (!frame)
+		goto fail;
+
+	packet = av_packet_alloc();
+	if (!packet)
+		goto fail;
+
+	frame->format = AV_PIX_FMT_YUV420P;
+	frame->width = vb->w;
+	frame->height = vb->h;
+
+	if (av_frame_get_buffer(frame, 32) < 0 ||
+		av_frame_make_writable(frame) < 0)
+		goto fail;
+
+	S->channels[chid].videnc.encoder = encoder;
+
+	scaler = sws_getContext(
+		vb->w, vb->h, AV_PIX_FMT_RGBA,
+		vb->w, vb->h, AV_PIX_FMT_YUV420P,
+		SWS_BILINEAR, NULL, NULL, NULL
+	);
+
+	if (!scaler)
+		goto fail;
+
+	S->channels[chid].videnc.scaler = scaler;
+	S->channels[chid].videnc.frame = frame;
+	S->channels[chid].videnc.packet = packet;
+
+	debug_print(1, "video encoder context built");
+	return true;
+
+fail:
+	if (frame)
+		av_frame_free(&frame);
+	if (packet)
+		av_packet_free(&packet);
+	if (scaler)
+		sws_freeContext(scaler);
+	return false;
 }
 #endif
 
@@ -505,77 +571,77 @@ void a12int_encode_h264(PACK_ARGS)
  * go with the cheap one for now. */
 #ifdef WANT_H264_ENC
 	if (vb->w % 2 != 0 || vb->h % 2 != 0){
-		drop_h264(S, chid);
-		a12int_encode_dpng(FWD_ARGS);
-		return;
+		drop_videnc(S, chid, true);
 	}
+
 /* On resize, rebuild the encoder stage and send new headers etc. */
 	else if (
-		vb->w != S->channels[chid].h264.w ||
-		vb->h != S->channels[chid].h264.h){
-		S->channels[chid].h264.failed = false;
-		drop_h264(S, chid);
-	}
+		vb->w != S->channels[chid].videnc.w ||
+		vb->h != S->channels[chid].videnc.h)
+		drop_videnc(S, chid, false);
 
 /* If we don't have an encoder (first time or reset due to resize),
  * try to configure, and if the configuration fails (i.e. still no
  * encoder set) fallback to DPNG and only try again on new size. */
-	if (!S->channels[chid].h264.encoder){
-		open_h264(S, vb, chid);
+	if (!S->channels[chid].videnc.encoder &&
+			!S->channels[chid].videnc.failed){
+		if (!open_videnc(S, vb, chid, AV_CODEC_ID_H264)){
+			debug_print(1, "couldn't setup h264 encoder");
+			drop_videnc(S, chid, true);
+		}
 	}
 
-	if (!S->channels[chid].h264.encoder){
-		debug_print(1, "couldn't setup h264 encoder");
-		S->channels[chid].h264.failed = true;
-		a12int_encode_dpng(FWD_ARGS);
-		return;
+/* on failure, just fallback and retry alloc on dimensions change */
+	if (S->channels[chid].videnc.failed)
+		goto fallback;
+
+/* just for shorthand */
+	AVFrame* frame = S->channels[chid].videnc.frame;
+	AVCodecContext* encoder = S->channels[chid].videnc.encoder;
+	AVPacket* packet = S->channels[chid].videnc.packet;
+	struct SwsContext* scaler = S->channels[chid].videnc.scaler;
+
+/* and color-convert from src into frame */
+	const uint8_t* const src[] = {(uint8_t*)vb->buffer};
+	int src_stride[] = {vb->stride};
+	sws_scale(scaler, src, src_stride, 0, vb->h, frame->data, frame->linesize);
+
+/* send to encoder and flush it out */
+	int ret = avcodec_send_frame(encoder, frame);
+	if (ret < 0){
+		drop_videnc(S, chid, true);
+		goto fallback;
 	}
 
-	x264_nal_t* nals;
-	int i_nals;
-	S->channels[chid].h264.pict_in.i_pts++;
-	ssize_t frame_sz = x264_encoder_encode(
-		S->channels[chid].h264.encoder, &nals, &i_nals,
-		&S->channels[chid].h264.pict_in, &S->channels[chid].h264.pict_out);
+	while (ret > 0){
+		ret = avcodec_receive_packet(encoder, packet);
+		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+			return;
+		else if (ret < 0){
+			drop_videnc(S, chid, true);
+			goto fallback;
+		}
 
-/* the encode stage might require buffering based on profile */
-	if (frame_sz <= 0)
-		return;
+		debug_print(2, "videnc: %5d", packet->size);
 
-/* doesn't seem to be a way for us to flag which parts of the frame are
- * dirty? this seems like a big waste for our use */
-	uint8_t hdr_buf[CONTROL_PACKET_SIZE];
-	a12int_vframehdr_build(hdr_buf, S->last_seen_seqnr, chid,
-		POSTPROCESS_VIDEO_H264, 0, vb->w, vb->h, vb->w, vb->h,
-		0, 0, frame_sz, vb->w * vb->h * 4, 1
-	);
-
-	a12int_append_out(S,
-		STATE_CONTROL_PACKET, hdr_buf, CONTROL_PACKET_SIZE, NULL, 0);
-
-	chunk_pack(S, STATE_VIDEO_PACKET, nals[0].p_payload, frame_sz, chunk_sz);
-	debug_print(2, "h264 frame: %zd", frame_sz);
-
-/*	while (x264_encoder_delayed_frames(S->channels[chid].h264.encoder)){
-		frame_sz = x264_encoder_encode(
-			S->channels[chid].h264.encoder, &nals, &i_nals,
-			&S->channels[chid].h264.pict_in, &S->channels[chid].h264.pict_out
-		);
-		if (frame_sz <= 0)
-			continue;
-
+/* don't see a nice way to combine ffmpegs view of 'packets' and ours,
+ * maybe we could avoid it and the extra copy but uncertain */
+		uint8_t hdr_buf[CONTROL_PACKET_SIZE];
 		a12int_vframehdr_build(hdr_buf, S->last_seen_seqnr, chid,
 			POSTPROCESS_VIDEO_H264, 0, vb->w, vb->h, vb->w, vb->h,
-			frame_sz, vb->w, vb->h, vb->w * vb->h * 4, 1
+			0, 0, packet->size, vb->w * vb->h * 4, 1
 		);
-
 		a12int_append_out(S,
 			STATE_CONTROL_PACKET, hdr_buf, CONTROL_PACKET_SIZE, NULL, 0);
 
-		chunk_pack(S, STATE_VIDEO_PACKET, nals[0].p_payload, frame_sz, chunk_sz);
-		debug_print(2, "h264 delayed frame: %zd", frame_sz);
-	} */
+		chunk_pack(S, STATE_VIDEO_PACKET, packet->data, packet->size, chunk_sz);
+		av_packet_unref(packet);
+		frame->pts++;
+	}
+	return;
 
+fallback:
+	a12int_encode_dpng(FWD_ARGS);
 #else
 	a12int_encode_dpng(FWD_ARGS);
 #endif

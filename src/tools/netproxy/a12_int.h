@@ -14,14 +14,7 @@
 
 #include "miniz/miniz.h"
 
-/*
- * Need these optional due to patents
- */
-#ifdef WANT_H264_ENC
-#include <x264.h>
-#endif
-
-#ifdef WANT_H264_DEC
+#if defined(WANT_H264_DEC) || defined(WANT_H264_ENC)
 #include <libavcodec/avcodec.h>
 #include <libavcodec/version.h>
 #include <libavutil/opt.h>
@@ -121,6 +114,7 @@ struct video_frame {
 		AVCodecContext* context;
 		AVPacket* packet;
 		AVFrame* frame;
+		struct SwsContext* scaler;
 	} ffmpeg;
 #endif
 
@@ -156,11 +150,14 @@ struct a12_state {
 			uint8_t* compression;
 #ifdef WANT_H264_ENC
 			struct {
-				x264_t* encoder;
-				x264_picture_t pict_in, pict_out;
+				AVCodecContext* encoder;
+				AVCodec* codec;
+				AVFrame* frame;
+				AVPacket* packet;
+				struct SwsContext* scaler;
 				size_t w, h;
 				bool failed;
-			} h264;
+			} videnc;
 #endif
 	};
 	} channels[256];

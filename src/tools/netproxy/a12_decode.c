@@ -102,7 +102,7 @@ static int video_miniz(const void* buf, int len, void* user)
 void a12int_decode_vbuffer(
 	struct a12_state* S, struct video_frame* cvf, struct arcan_shmif_cont* cont)
 {
-	debug_print(1, "decode vbuffer: pp: %d", cvf->postprocess);
+	debug_print(1, "decode vbuffer, method: %d", cvf->postprocess);
 	if (cvf->postprocess == POSTPROCESS_VIDEO_MINIZ ||
 			cvf->postprocess == POSTPROCESS_VIDEO_DMINIZ){
 		size_t inbuf_pos = cvf->inbuf_pos;
@@ -158,6 +158,8 @@ void a12int_decode_vbuffer(
 				cvf->ffmpeg.frame = NULL;
 				goto out_h264;
 			}
+
+			debug_print(1, "ffmpeg state block allocated");
 		}
 
 		av_parser_parse2(cvf->ffmpeg.parser, cvf->ffmpeg.context,
@@ -169,13 +171,17 @@ void a12int_decode_vbuffer(
  * to assume that and try to sidestep that layer - though it should be tried at
  * some point */
 		if (cvf->ffmpeg.packet->size){
+			debug_print(2, "ffmpeg packet size: %d", cvf->ffmpeg.packet->size);
 			int ret = avcodec_send_packet(cvf->ffmpeg.context, cvf->ffmpeg.packet);
+			avcodec_send_packet(cvf->ffmpeg.context, &(struct AVPacket){});
 
 			while (ret >= 0){
 				ret = avcodec_receive_frame(cvf->ffmpeg.context, cvf->ffmpeg.frame);
+				debug_print(2, "ffmpeg_receive status: %d", ret);
 				if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
 					goto out_h264;
 
+				debug_print(1, "rescale and commit %d", cvf->commit);
 /* Quite possible that we should actually cache this context as well, but it
  * has different behavior to the rest due to resize. Since this all turns
  * ffmpeg into a dependency, maybe it belongs in the vframe setup on resize. */
@@ -183,18 +189,23 @@ void a12int_decode_vbuffer(
 					sws_getContext(cvf->w, cvf->h, cvf->ffmpeg.frame->format,
 						cvf->w, cvf->h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
 
-				sws_scale(scaler,
-					(const uint8_t* const*) cvf->ffmpeg.frame->data,
-					cvf->ffmpeg.frame->linesize, 0, cvf->h,
-					cont->vidb, cont->stride);
+				uint8_t* const dst[] = {cont->vidb};
+				int dst_stride[] = {cont->stride};
 
-				sws_destroyContext(scaler);
+				sws_scale(scaler, (const uint8_t* const*) cvf->ffmpeg.frame->data,
+					cvf->ffmpeg.frame->linesize, 0, cvf->h, dst, dst_stride);
+
+				if (cvf->commit && cvf->commit != 255)
+					arcan_shmif_signal(cont, SHMIF_SIGVID);
+
+				sws_freeContext(scaler);
 			}
 		}
 
 out_h264:
 		free(cvf->inbuf);
 		cvf->carry = 0;
+		return;
 	}
 #endif
 
