@@ -603,12 +603,19 @@ void a12int_encode_h264(PACK_ARGS)
 
 /* and color-convert from src into frame */
 	const uint8_t* const src[] = {(uint8_t*)vb->buffer};
-	int src_stride[] = {vb->stride};
-	sws_scale(scaler, src, src_stride, 0, vb->h, frame->data, frame->linesize);
+	int src_stride[] = {vb->pitch};
+	int rv = sws_scale(scaler,
+		src, src_stride, 0, vb->h, frame->data, frame->linesize);
+	if (rv < 0){
+		debug_print(1, "rescaling failed: %d", rv);
+		drop_videnc(S, chid, true);
+		goto fallback;
+	}
 
 /* send to encoder and flush it out */
 	int ret = avcodec_send_frame(encoder, frame);
 	if (ret < 0){
+		debug_print(1, "encoder failed: %d", rv);
 		drop_videnc(S, chid, true);
 		goto fallback;
 	}
@@ -618,6 +625,7 @@ void a12int_encode_h264(PACK_ARGS)
 		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
 			return;
 		else if (ret < 0){
+			debug_print(1, "error getting packet from encoder: %d", rv);
 			drop_videnc(S, chid, true);
 			goto fallback;
 		}
@@ -645,4 +653,5 @@ fallback:
 #else
 	a12int_encode_dpng(FWD_ARGS);
 #endif
+	debug_print(1, "switching to fallback (H264) on videnc fail");
 }
