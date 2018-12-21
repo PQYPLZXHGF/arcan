@@ -96,7 +96,7 @@ enum synchopts {
 	SYNCH_TIGHT
 };
 
-static int synchopt = SYNCH_VSYNCH;
+static int synchopt = SYNCH_ADAPTIVE;
 
 /*
  * difference between step/unlock is that step performs a polling step
