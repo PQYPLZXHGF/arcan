@@ -43,22 +43,9 @@ typedef void (EGLAPIENTRY* PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)(GLenum target, G
 static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES;
 #endif
 
-static char* synchopts[] = {
-	"parent", "display server controls synchronisation",
-	"pre-wake", "use the cost of and jitter from previous frames",
-	"adaptive", "skip a frame if syncpoint is at risk",
-	NULL
-};
-
 static char* input_envopts[] = {
 	NULL
 };
-
-static enum {
-	PARENT = 0,
-	PREWAKE,
-	ADAPTIVE
-} syncopt;
 
 static struct monitor_mode mmodes[] = {
 	{
@@ -301,20 +288,6 @@ void* platform_video_gfxsym(const char* sym)
 	return arcan_shmifext_lookup(&disp[0].conn, sym);
 }
 
-void platform_video_setsynch(const char* arg)
-{
-	int ind = 0;
-
-	while(synchopts[ind]){
-		if (strcmp(synchopts[ind], arg) == 0){
-			syncopt = (ind > 0 ? ind / 2 : ind);
-			break;
-		}
-
-		ind += 2;
-	}
-}
-
 int platform_video_cardhandle(int cardn, int* method, size_t* msz, uint8_t** dbuf)
 {
 /* this should be retrievable from the shmifext- connection so that we can
@@ -324,11 +297,6 @@ int platform_video_cardhandle(int cardn, int* method, size_t* msz, uint8_t** dbu
 
 void platform_event_samplebase(int devid, float xyz[3])
 {
-}
-
-const char** platform_video_synchopts()
-{
-	return (const char**) synchopts;
 }
 
 static const char* arcan_envopts[] = {
