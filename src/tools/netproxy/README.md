@@ -1,77 +1,40 @@
 # arcan-net
 
-This tool is the development sandbox for the arcan-net bridge used to link
-single clients over a network.
+This folder contains the subproject that provide per client net proxying
+for shmif- based clients.
 
-DISCLAIMER: This is in an early stage and absolutely not production ready now
-or anytime soon. Treat it like a sample of what is to come during the 0.6-
-series of releases - the real version will depend on the rendering protocol
-that will be derived from a packing format of the lua API, the serialization
-format used in TUI and A/V encoding formats to be decided (likely
-h264-lowlatency for game content, AV1 for bufferable media if hw gets fast
-enough, zstd for uncompressed blob transfers, Open3DGC for 3dvobj data etc).
+DISCLAIMER:This is in an early stage and absolutely not production ready
+now or anytime soon. Treat it like a sample of what will come during the
+0.6- series of releases or look at the TODO for things to help out with.
 
-There are two modes to building this tool, a 'simple' (arcan-netpipe) and
-the "real" but defunct (arcan-net) and disabled.
+Two binaries are produced by building this tool. The 'simple' netpipe is
+managed unencrypted over FIFOs that the caller manages. The more complex
+netproxy is currently built on TCP as a transport layer and do symmetric
+encryption and authentication using pre-shared credentials.
 
-Arcan-netpipe uses some unspecified channel for transmission, e.g. piping via
-SSH and so on. As such, is has rather low performance and the communication is
-otherwise unprotected. It is valuable for testing, development and
-debugging/fault-injection - and for quick and dirty bridging. It can also only
-bridge a single client per instance.
-
-Arcan-net is just stubs/defunct experiments at the moment, the intention is to
-build on UDT as a low-latency UDP based transport but will not be given any
-consideration until netpipe is fully working as the a12- state machine manager
-need to be really robust before going further.
-
-# Use
-
-Arcan netpipe version (testing example, act as a local MiM proxy):
-
-    ./arcan-netpipe -t -s mycon &
-		ARCAN_CONNPATH=mycon afsrv_terminal
-
-Forwarding a local client:
-
-    ./arcan-netpipe -s mycon -x ssh user@host arcan-netpipe -c -s localcon
-
-Note that a connection point need to be specified on both sides.
-
-Forwarding a remote client:
-
-    ./arcan-netpipe -c -x ssh user@host arcan-netpipe -s mycon -x afsrv_terminal
-
-Or you can manually setup fifos, client/server etc.:
-
-    mkfifo c cl_in
-		mkfifo c cl_out
-		cat cl_in | arcan-netpipe -c | cl_out
-		cat cl_out |arcan-netpipe -s mycon | cl_in
+Netpipe is primarily used for local development and testing, while proxy
+has not yet evolved to a sufficient standard.
 
 # Todo
 
-This subproject will stretch until the end of the 0.6 series topic, with some
-sharing likely to be done with the afsrv\_net (i.e. the underlying protocol,
-and state machine, a12, used along with some service discovery feature and
-better scripting API integration).
+The following are basic expected TODO points and an estimate as to where
+on the timeline the respective features will be developed/available.
 
 Milestone 1 - basic features (0.5.x)
 
 - [x] Basic API
 - [x] Control
-- [x] Netpipe working
+- [x] Netpipe
+- [ ] Raw binary descriptor transfers
+- [ ] Client multiplexing
+- [ ] arcan-netproxy (TCP)
 - [x] Uncompressed Video / Video delta
 - [ ] Uncompressed Audio / Audio delta
 - [x] Compressed Video
 	-  [x] x264
 	-  [x] xor-PNG
-- [ ] Raw binary descriptor transfers
 - [ ] Subsegments
-- [ ] Client multiplexing
-- [ ] Socket support (disable Nagle)
-- [ ] Basic authentication
-- [ ] Cipher
+- [ ] Basic authentication / Cipher (blake+chaha20)
 
 Milestone 2 - closer to useful (0.6.x)
 
@@ -84,11 +47,13 @@ Milestone 2 - closer to useful (0.6.x)
 - [ ] Accelerated encoding of gpu-handles
 - [ ] Traffic monitoring tools
 - [ ] Output segments
+- [ ] Basic privsep/sandboxing
+- [ ] Splicing / Local mirroring
 
 Milestone 3 - big stretch (0.6.x)
 
+- [ ] arcan-netproxy (UDT)
 - [ ] curve25519 key exchange
-- [ ] Stream-ciper
 - [ ] 'ALT' arcan-lwa interfacing
 - [ ] ZSTD
 - [ ] Subprotocols (vobj, gamma, ...)
@@ -96,22 +61,21 @@ Milestone 3 - big stretch (0.6.x)
 - [ ] Congestion control / dynamic encoding parameters
 - [ ] Side-channel Resilience
 - [ ] Local discovery Mechanism (pluggable)
-- [ ] Merge into arcan-net
+- [ ] Add to arcan-net
 - [ ] Special provisions for agp/alt channels
-- [ ] UDT based carrier (full- proxy client)
 - [ ] Clean-up, RFC level documentation
 
 # Security/Safety
 
-Right now, there's barely any (there will be though) - a lot of the other
-quality problems should be solved first, i.e. audio / video format encoding,
-event packing format and so on.
+Right now, assume that there is no guarantees on neither confidentiality,
+integrity or availability. As can be seen in the todo list, this won't remain
+the case but there are other priorities to sort out first.
 
-The only required part right now is that there is a shared authentication key
-file (0..64 bytes) that has been preshared over some secure channel, ssh is a
-good choice. This key is used for building individual packet MACs.
+For arcan-netpipe, you are expected to provide it through whatever tunneling
+mechanism you chose.
 
-ALL DATA IS BEING SENT IN PLAINTEXT, ANYONE ON THE NETWORK CAN SEE WHAT YOU DO.
+For arcan-netproxy, you are currently restricted to symmetric primitives
+derived from the password expected to be provided on stdin.
 
 # Hacking
 To get a grasp of the codebase, the major components to understand is on
@@ -145,20 +109,21 @@ status.
 
 # Protocol
 
-This section mostly covers a rough draft of things as they evolve, the real
-spec will be rewritten separately towards the end of the subproject as a
-'RFC-like' description with the a12 state machine mostly decoupled from shmif.
+This section mostly covers a rough draft of things as they evolve. A more
+'real' spec is to be written separately towards the end of the subproject
+in an RFC like style and the a12 state machine will be decoupled from the
+current shmif dependency.
 
 Each arcan segment correlates to a 'channel' that can be multiplexed over
 one of these transports, with a sequence number used as a synchronization
 primitive for re-linearization. For each channel, a number of streams can
-be defined, each with a unique 32-bit identifier. Multiple streams can be
-in flight at the same time, and can be dynamically cancelled.
+be defined, each with a unique 32-bit identifier. A stream corresponds to
+one binary, audio or video transfer operation. Multiple streams can be in
+flight at the same time, and can be dynamically cancelled.
 
-Encryption is built on preauthenticated curve25519 with blake2-aes128-ctr
-for MAC and cipher. Each message begins with a 16 byte MAC, keyed with the
-input auth-key for the first message, then payload prefixed with the MAC
-from the last message.
+The symmetric encryption scheme is simply a preshared secret hashed using
+BLAKE2 that has been salted with the salt provided as part of the initial
+hello command.
 
 Each message has the outer structure of :
 
@@ -211,9 +176,10 @@ delaying input events, scaling window sizes, ... If they still keep
 drifting, show a user notice and destroy the channel.
 
 ### command = 0, hello
-First message sent of the channel, it's rude not to say hi.
 - [0] version major (match the shmif- version until we have a finished protocol)
 - [1] version minor (match the shmif- version until we have a finished protocol)
+- [2..10] Authentication salt
+- [11..43] Curve25519 public key
 
 ### command = 1, shutdown
 The nice way of saying that everything is about to be shut down, remaining
@@ -293,7 +259,12 @@ in subsequent vstream-data packets.
 incomplete
 
 ### command - 9, define bstream
-incomplete
+- [18..21] : stream-id
+- [22..28] : stream-size, 0 if 'streaming source'
+
+After the completion of a bstream transfer, there must always be an event
+packet with the corresponding event that is to 'consume' the binary stream,
+then the data itself.
 
 ##  Event (2), fixed length
 - sequence number : uint64

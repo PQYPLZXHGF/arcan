@@ -473,9 +473,19 @@ void drop_videnc(struct a12_state* S, int chid, bool failed)
 	debug_print(1, "dropping h264 context");
 }
 
+static unsigned long pick_bitrate(size_t w, size_t h, struct a12_vframe_opts o)
+{
+/* Just some rough 'better than nothing' table for when we don't get a CRF or a
+ * specified bitrate by the caller during setup or through a later backpressure
+ * estimation */
+	return 1000000;
+}
+
 static bool open_videnc(struct a12_state* S,
+	struct a12_vframe_opts venc_opts,
 	struct shmifsrv_vbuffer* vb, int chid, int codecid)
 {
+	debug_print(1, "opening video encoder for %d:%d", chid, codecid);
 	AVCodec* codec = S->channels[chid].videnc.codec;
 	AVFrame* frame = NULL;
 	AVPacket* packet = NULL;
@@ -497,15 +507,39 @@ static bool open_videnc(struct a12_state* S,
 	S->channels[chid].videnc.w = vb->w;
 	S->channels[chid].videnc.h = vb->h;
 
-/* should really check the channel segment type and pick parameters on that */
+/* Check opts and switch preset, bitrate, tuning etc. based on resolution
+ * and link estimates. Later we should switch this dynamically, possibly
+ * reconfigure based on AV_CODEC_CAP_PARAM_CHANGE */
 	if (codecid == AV_CODEC_ID_H264){
-		av_opt_set(encoder->priv_data, "preset", "veryfast", 0);
-		av_opt_set(encoder->priv_data, "tune", "zerolatency", 0);
+		switch(venc_opts.bias){
+		case VFRAME_BIAS_LATENCY:
+			av_opt_set(encoder->priv_data, "preset", "veryfast", 0);
+			av_opt_set(encoder->priv_data, "tune", "zerolatency", 0);
+		break;
+
+/* Many more dynamic heuristics to consider here, doing rolling frame contents
+ * based on segment type and to distinguish GAME based on the complexity
+ * (retro/pixelart vs. 3D) and on the load */
+		case VFRAME_BIAS_BALANCED:
+			av_opt_set(encoder->priv_data, "preset", "medium", 0);
+			av_opt_set(encoder->priv_data, "tune", "film", 0);
+		break;
+
+		case VFRAME_BIAS_QUALITY:
+			av_opt_set(encoder->priv_data, "preset", "slow", 0);
+			av_opt_set(encoder->priv_data, "tune", "film", 0);
+		break;
+		}
 	}
 
 /* should expose a lot more options passable from the transport layer here,
  * but that's something for the 0.6 series */
-	encoder->bit_rate = 400000;
+	if (venc_opts.variable){
+	}
+	else {
+		encoder->bit_rate = venc_opts.bitrate > 0 ?
+			(venc_opts.bitrate * 1000000.0f) : pick_bitrate(vb->w, vb->h, venc_opts);
+	}
 	encoder->width = vb->w;
 	encoder->height = vb->h;
 
@@ -514,9 +548,11 @@ static bool open_videnc(struct a12_state* S,
  * of video playback and so on. */
 	encoder->time_base = (AVRational){1, 25};
 	encoder->framerate = (AVRational){25, 1};
-	encoder->gop_size = 10;
+	encoder->gop_size = 1;
 	encoder->max_b_frames = 1;
 	encoder->pix_fmt = AV_PIX_FMT_YUV420P;
+	if (avcodec_open2(encoder, codec, NULL) < 0)
+		goto fail;
 
 	frame = av_frame_alloc();
 	if (!frame)
@@ -529,6 +565,7 @@ static bool open_videnc(struct a12_state* S,
 	frame->format = AV_PIX_FMT_YUV420P;
 	frame->width = vb->w;
 	frame->height = vb->h;
+	frame->pts = 0;
 
 	if (av_frame_get_buffer(frame, 32) < 0 ||
 		av_frame_make_writable(frame) < 0)
@@ -537,7 +574,7 @@ static bool open_videnc(struct a12_state* S,
 	S->channels[chid].videnc.encoder = encoder;
 
 	scaler = sws_getContext(
-		vb->w, vb->h, AV_PIX_FMT_RGBA,
+		vb->w, vb->h, AV_PIX_FMT_BGRA,
 		vb->w, vb->h, AV_PIX_FMT_YUV420P,
 		SWS_BILINEAR, NULL, NULL, NULL
 	);
@@ -585,7 +622,7 @@ void a12int_encode_h264(PACK_ARGS)
  * encoder set) fallback to DPNG and only try again on new size. */
 	if (!S->channels[chid].videnc.encoder &&
 			!S->channels[chid].videnc.failed){
-		if (!open_videnc(S, vb, chid, AV_CODEC_ID_H264)){
+		if (!open_videnc(S, opts, vb, chid, AV_CODEC_ID_H264)){
 			debug_print(1, "couldn't setup h264 encoder");
 			drop_videnc(S, chid, true);
 		}
@@ -602,8 +639,9 @@ void a12int_encode_h264(PACK_ARGS)
 	struct SwsContext* scaler = S->channels[chid].videnc.scaler;
 
 /* and color-convert from src into frame */
+	int ret;
 	const uint8_t* const src[] = {(uint8_t*)vb->buffer};
-	int src_stride[] = {vb->pitch};
+	int src_stride[] = {vb->stride};
 	int rv = sws_scale(scaler,
 		src, src_stride, 0, vb->h, frame->data, frame->linesize);
 	if (rv < 0){
@@ -612,19 +650,24 @@ void a12int_encode_h264(PACK_ARGS)
 		goto fallback;
 	}
 
-/* send to encoder and flush it out */
-	int ret = avcodec_send_frame(encoder, frame);
-	if (ret < 0){
-		debug_print(1, "encoder failed: %d", rv);
+/* send to encoder, may return EAGAIN requesting a flush */
+again:
+	ret = avcodec_send_frame(encoder, frame);
+	if (ret < 0 && ret != AVERROR(EAGAIN)){
+
+		debug_print(1, "encoder failed: %d", ret);
 		drop_videnc(S, chid, true);
 		goto fallback;
 	}
 
-	while (ret > 0){
-		ret = avcodec_receive_packet(encoder, packet);
-		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+/* flush, 0 is OK, < 0 and not EAGAIN is a real error */
+	int out_ret;
+	do {
+		out_ret = avcodec_receive_packet(encoder, packet);
+		if (out_ret == AVERROR(EAGAIN) || out_ret == AVERROR_EOF)
 			return;
-		else if (ret < 0){
+
+		else if (out_ret < 0){
 			debug_print(1, "error getting packet from encoder: %d", rv);
 			drop_videnc(S, chid, true);
 			goto fallback;
@@ -646,6 +689,12 @@ void a12int_encode_h264(PACK_ARGS)
 		av_packet_unref(packet);
 		frame->pts++;
 	}
+	while (out_ret >= 0);
+
+/* frame never got encoded, should work now */
+	if (ret == AVERROR(EAGAIN))
+		goto again;
+
 	return;
 
 fallback:

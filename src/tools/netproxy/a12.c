@@ -287,6 +287,16 @@ static bool process_mac(struct a12_state* S)
 	return true;
 }
 
+static void command_binarystream(struct a12_state* S)
+{
+	uint8_t channel = S->decode[16];
+/*
+ * need to flag that the next event is to be deferred (though it will also
+ * be marked as a descrevent- so that might actually suffice)
+ */
+
+}
+
 static void command_videoframe(struct a12_state* S)
 {
 	uint8_t channel = S->decode[16];
@@ -401,6 +411,10 @@ static void process_control(struct a12_state* S)
 	switch(command){
 	case COMMAND_HELLO:
 		debug_print(1, "HELO");
+	/*
+	 * CRYPTO- fixme: Update keymaterial etc. here.
+	 * Verify that this is the first packet.
+	 */
 	break;
 	case COMMAND_SHUTDOWN: break;
 	case COMMAND_ENCNEG: break;
@@ -412,7 +426,9 @@ static void process_control(struct a12_state* S)
 		command_videoframe(S);
 	break;
 	case COMMAND_AUDIOFRAME: break;
-	case COMMAND_BINARYSTREAM: break;
+	case COMMAND_BINARYSTREAM:
+		command_binarystream(S);
+	break;
 	default:
 		debug_print(1, "unhandled control message");
 	break;
@@ -428,8 +444,6 @@ static void process_event(struct a12_state* S,
 	if (!process_mac(S))
 		return;
 
-/* crypto-FIXME: apply stream-cipher */
-/* serialization-FIXME: proper unpack uint64_t */
 	struct arcan_event aev;
 	unpack_u64(&S->last_seen_seqnr, S->decode);
 	if (-1 == arcan_shmif_eventunpack(
@@ -564,6 +578,8 @@ a12_channel_unpack(struct a12_state* S,
 	S->left -= ntr;
 	S->decode_pos += ntr;
 	buf_sz -= ntr;
+
+/* crypto- fixme: if we are in decipher-state, update cipher with ntr */
 
 /* do we need to buffer more? */
 	if (S->left)
@@ -732,13 +748,8 @@ a12_channel_enqueue(struct a12_state* S, struct arcan_event* ev)
 	if (-1 == step)
 		return;
 
-/*
- * DEBUG: replace with 'e'
-	for (size_t i = SEQUENCE_NUMBER_SIZE; i < step + SEQUENCE_NUMBER_SIZE; i++)
-		outb[i] = 'e';
- */
-
 	a12int_append_out(S,
 		STATE_EVENT_PACKET, outb, step + SEQUENCE_NUMBER_SIZE, NULL, 0);
+
 	debug_print(2, "enqueue event %s", arcan_shmif_eventstr(ev, NULL, 0));
 }

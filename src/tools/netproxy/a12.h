@@ -117,8 +117,20 @@ enum a12_vframe_method {
 	VFRAME_METHOD_H264
 };
 
+enum a12_vframe_compression_bias {
+	VFRAME_BIAS_LATENCY = 0,
+	VFRAME_BIAS_BALANCED,
+	VFRAME_BIAS_QUALITY
+};
+
 struct a12_vframe_opts {
 	enum a12_vframe_method method;
+	enum a12_vframe_compression_bias bias;
+	bool variable;
+	union {
+		float bitrate; /* !variable, Mbit */
+		int ratefactor; /* variable (ffmpeg scale) */
+	};
 };
 
 /* Enqueue a video frame as part of the specified channel */

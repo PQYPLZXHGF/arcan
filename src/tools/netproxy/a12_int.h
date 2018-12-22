@@ -87,6 +87,24 @@ enum {
 
 size_t a12int_header_size(int type);
 
+struct audio_frame {
+	uint32_t sample_rate;
+	uint8_t channels;
+
+	uint8_t postprocess;
+/* only used for some postprocessing mode (i.e. decompression) */
+	uint8_t* inbuf;
+	size_t inbuf_pos;
+	size_t inbuf_sz;
+	size_t expanded_sz;
+};
+
+struct binary_frame {
+	int tmp_fd;
+	bool read;
+	uint64_t size;
+};
+
 struct video_frame {
 	uint32_t id;
 	uint16_t sw, sh;
@@ -142,6 +160,8 @@ struct a12_state {
 		struct arcan_shmif_cont* cont;
 		union {
 			struct video_frame vframe;
+			struct audio_frame aframe;
+			struct binary_frame bframe;
 		} unpack_state;
 
 /* encoding (recall, both sides can actually do this) */

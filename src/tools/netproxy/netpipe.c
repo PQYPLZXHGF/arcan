@@ -337,8 +337,12 @@ static int run_shmif_client(
 			while (( sc = arcan_shmif_poll(&wnd, &newev)) > 0){
 				debug_print(2, "(cl) incoming event: %s",
 					arcan_shmif_eventstr(&newev, NULL, 0));
-/* FIXME: special consideration for subsegment channels */
+
+/* we got a descriptor passing event, some of these we could/should discard,
+ * while others need to be forwarded as a binary- chunk stream and kept out-
+ * of order on the other side */
 				if (arcan_shmif_descrevent(&newev)){
+
 					debug_print(1, "(cl) ignoring descripting passing event");
 				}
 				else
@@ -373,6 +377,7 @@ static int run_shmif_client(
 #ifdef DUMP_IN
 	fclose(fpek_in);
 #endif
+	arcan_shmif_drop(&wnd);
 	return EXIT_SUCCESS;
 }
 
@@ -428,8 +433,8 @@ static int show_usage(const char* n, const char* msg)
 	"\n\t%s server mode: arcan-net -s connpoint\n"
 	"\t%s testing mode: arcan-net -t(server main) or -T (client main)"
 	"\nshared:"
-	"\n\t -k keyfile: authkey], use authentication key from [authkey]"
-	"\n\t -v method], force video compression (rgba, rgb, rgb565, dpng)\n", msg, n, n, n);
+	"\n\t -k keyfile: authkey, use authentication key from [authkey]"
+	"\n\t -v method, force video compression (rgba, rgb, rgb565, dpng, h264)\n", msg, n, n, n);
 	return EXIT_FAILURE;
 }
 

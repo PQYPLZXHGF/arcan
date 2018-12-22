@@ -3,8 +3,9 @@ Networking changes for 0.5.6
 Time to start building the arcan_netproxy for real.
 For this batch, the following should be covered:
 
-[x] event data over netpipe
-[ ] socket support to netpipe
-[ ] uncompressed video support
-[ ] video delta
-[ ] video compression
+[x] video transfers / compression
+[ ] binary transfers
+[x] audio transfers
+[ ] multiple clients
+[ ] subsegments
+[ ] arcan-netproxy
