@@ -13,6 +13,10 @@
 #include "a12_decode.h"
 #include "a12_encode.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 static int header_sizes[] = {
 	MAC_BLOCK_SZ + 1, /* NO packet, just MAC + outer header */
 	CONTROL_PACKET_SIZE,
@@ -202,10 +206,6 @@ struct a12_state* a12_channel_open(uint8_t* authk, size_t authk_sz)
 	uint8_t outb[CONTROL_PACKET_SIZE] = {0};
 	step_sequence(S, outb);
 
-/* DEBUG: replace control with 'c' */
-	for (size_t i = 8; i < CONTROL_PACKET_SIZE; i++)
-		outb[i] = 'c';
-
 	outb[17] = 0;
 
 	debug_print(1, "channel open, add control packet");
@@ -294,6 +294,11 @@ static void command_binarystream(struct a12_state* S)
  * need to flag that the next event is to be deferred (though it will also
  * be marked as a descrevent- so that might actually suffice)
  */
+	struct arcan_shmif_cont* cont = S->channels[channel].cont;
+	if (!cont){
+		debug_print(1, "no segment mapped on channel");
+		return;
+	}
 
 }
 
@@ -720,21 +725,59 @@ a12_channel_vframe(struct a12_state* S,
 	}
 }
 
+ssize_t get_file_size(int fd)
+{
+	struct stat fdinf;
+	if (fstat(fd, &fdinf) == -1)
+		return -1;
+
+	return fdinf.st_size;
+}
+
 void
 a12_channel_enqueue(struct a12_state* S, struct arcan_event* ev)
 {
 	if (!S || S->cookie != 0xfeedface || !ev)
 		return;
 
+	int transfer_fd = -1;
+	ssize_t transfer_sz = -1;
+
 /* ignore descriptor- passing events for the time being as they add
  * queueing requirements, possibly compression and so on */
 	if (arcan_shmif_descrevent(ev)){
 		char msg[512];
-		struct arcan_event aev = *ev;
 		debug_print(1, "ignoring descriptor event: %s",
-			arcan_shmif_eventstr(&aev, msg, 512));
+			arcan_shmif_eventstr(ev, msg, 512));
 
-		return;
+		switch (ev->tgt.kind){
+			case TARGET_COMMAND_STORE:
+			case TARGET_COMMAND_BCHUNK_OUT:
+/* this means the OTHER side should provide us with data */
+			break;
+			case TARGET_COMMAND_RESTORE:
+			case TARGET_COMMAND_BCHUNK_IN:
+/* this means the OTHER side should receive data from us */
+			break;
+			case TARGET_COMMAND_FONTHINT:
+/* this MAY mean the OTHER side should receive data from us,
+ * since it is a font we have reasonable expectations on the
+ * size and can just throw it in a memory buffer by queueing
+ * it outright */
+			if (ev->tgt.ioevs[0].iv != -1){
+				transfer_fd = ev->tgt.ioevs[0].iv;
+				transfer_sz = get_file_size(transfer_fd);
+			}
+			break;
+			case TARGET_COMMAND_NEWSEGMENT:
+/* when forwarded, this means not more than relay the info about
+ * the event - what is also needed is for the corresponding side
+ * (server or client) to set new local primitives and treat them
+ * as a new channel */
+			break;
+			default:
+			break;
+		}
 	}
 
 /*
