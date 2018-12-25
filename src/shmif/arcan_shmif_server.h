@@ -199,6 +199,11 @@ size_t shmifsrv_dequeue_events(
 	struct shmifsrv_client*, struct arcan_event* newev, size_t limit);
 
 /*
+ * Retrieve the currently registered type for a client
+ */
+enum ARCAN_SEGID shmifsrv_client_type(struct shmifsrv_client* cl);
+
+/*
  * Handle some of the normal state-tracking events (e.g. CLOCKREQ,
  * BUFFERSTREAM, FLUSHAUD). Returns true if the event was consumed and no
  * further action is needed.

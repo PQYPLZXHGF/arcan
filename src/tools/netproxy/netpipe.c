@@ -1,6 +1,5 @@
 /*
- * Pipe-based implementation of the A12 protocol,
- * relying on pre-established secure channels and low bandwidth demands.
+ * Simple implementation of a client/server proxy.
  */
 #include <arcan_shmif.h>
 #include <errno.h>
@@ -12,165 +11,7 @@
 #include <sys/wait.h>
 #include "a12_int.h"
 #include "a12.h"
-
-static const short c_inev = POLLIN | POLLERR | POLLNVAL | POLLHUP;
-static const short c_outev = POLLOUT | POLLERR | POLLNVAL | POLLHUP;
-static int vframe_method = 0;
-
-static void on_srv_event(int chid, struct arcan_event* ev, void* tag)
-{
-	struct shmifsrv_client* cs = tag;
-	debug_print(2,
-		"client event: %s on ch %d", arcan_shmif_eventstr(ev, NULL, 0), chid);
-	if (chid != 0){
-		fprintf(stderr, "Multi-channel support not yet finished\n");
-		return;
-	}
-
-/* note, this needs to be able to buffer etc. to handle a client that has
- * a saturated event queue ... */
-	shmifsrv_enqueue_event(cs, ev, -1);
-}
-
-static void server_mode(
-	struct shmifsrv_client* a, struct a12_state* ast, int fdin, int fdout)
-{
-/* 1. setup a12 in connect mode, _open */
-	struct pollfd fds[3] = {
-		{ .fd = shmifsrv_client_handle(a), .events = c_inev },
-		{	.fd = fdin, .events = c_inev },
-		{ .fd = fdout, .events = c_outev }
-	};
-
-#ifdef DUMP_IN
-	FILE* fpek_in = fopen("netpipe.srv.in", "w+");
-#endif
-
-	bool alive = true;
-
-	uint8_t* outbuf;
-	size_t outbuf_sz = 0;
-
-	while (alive){
-/* first, flush current outgoing and/or swap buffers */
-		int np = 2;
-		if (outbuf_sz || (outbuf_sz = a12_channel_flush(ast, &outbuf))){
-			ssize_t nw = write(fdout, outbuf, outbuf_sz);
-
-/* simple debugging mode, align the successful outwrites with a file */
-#ifdef DUMP_OUT
-			if (nw > 0){
-				static uint8_t seqn;
-				char fn[sizeof("out_srv_xxx.raw")];
-				sprintf(fn, "out_srv_%"PRIu8".raw", seqn++);
-				FILE* outf = fopen(fn, "w+");
-				fwrite(outbuf, 1, nw, outf);
-				fclose(outf);
-			}
-#endif
-
-/* couldn't write everything, non-blocking problem -- extend the poll
- * to include pipe-out */
-			if (nw > 0){
-				outbuf += nw;
-				outbuf_sz -= nw;
-			}
-			if (outbuf_sz)
-				np = 3;
-		}
-
-/* pollset is extended to cover STDOUT if we have an ongoing buffer,
- * note that we right now have no real handle to poll client events
- * and that needs to be communicated via an OOB thread with futexes */
-		int sv = poll(fds, np, 16);
-		if (sv < 0){
-			if (sv == -1 && errno != EAGAIN && errno != EINTR)
-				alive = false;
-			continue;
-		}
-
-		if (sv && fds[0].revents){
-			if (fds[0].revents & (~POLLIN)){
-				alive = false;
-				continue;
-			}
-		}
-
-		if (np == 3 && sv && fds[2].revents){
-			if (fds[2].revents & (~POLLOUT)){
-				alive = false;
-				continue;
-			}
-		}
-
-/* STDIN - update a12 state machine */
-		if (sv && fds[1].revents){
-			if (fds[1].revents & (~POLLIN)){
-				alive = false;
-				continue;
-			}
-
-			uint8_t inbuf[9000];
-			ssize_t nr = 0;
-			while ((nr = read(fds[1].fd, inbuf, 9000)) > 0){
-				debug_print(2, "unpack %zd bytes", nr);
-#ifdef DUMP_IN
-				fwrite(inbuf, 1, nr, fpek_in);
-				fflush(fpek_in);
-#endif
-				a12_channel_unpack(ast, inbuf, nr, a, on_srv_event);
-			}
-		}
-
-		struct arcan_event newev;
-		while (shmifsrv_dequeue_events(a, &newev, 1)){
-			debug_print(2, "forward event: %s",
-				arcan_shmif_eventstr(&newev, NULL, 0));
-			if (arcan_shmif_descrevent(&newev)){
-				debug_print(1, "(srv) ignoring descriptor passing event");
-			}
-			else if (!shmifsrv_process_event(a, &newev)){
-				a12_channel_enqueue(ast, &newev);
-			}
-		}
-
-		int pv;
-		while ((pv = shmifsrv_poll(a)) != CLIENT_NOT_READY){
-			if (pv == CLIENT_DEAD){
-				alive = false;
-				continue;
-			}
-			if (pv & CLIENT_VBUFFER_READY){
-	/* copy + release if possible,
-	 arcan_event ev = {
-	     .category = EVENT_TARGET,
-			 .tgt.kind = TARGET_COMMAND_BUFFER_FAIL
-	 };
- */
-				struct shmifsrv_vbuffer vb = shmifsrv_video(a);
-
-/*
- * Heuristics on type, vframe method etc. with argument overrides should be
- * added here
- */
-				a12_channel_vframe(ast, 0, &vb, (struct a12_vframe_opts){
-					.method = vframe_method
-				});
-				shmifsrv_video_step(a);
-			}
-			if (pv & CLIENT_ABUFFER_READY){
-				debug_print(2, "audio-buffer");
-				shmifsrv_audio(a, NULL, NULL);
-			}
-		}
-	}
-
-#ifdef DUMP_IN
-	fclose(fpek_in);
-#endif
-	debug_print(1, "(srv) shutting down connection");
-	shmifsrv_free(a);
-}
+#include "a12_helper.h"
 
 static int run_shmif_server(
 	uint8_t* authk, size_t auth_sz, const char* cp, int fdin, int fdout)
@@ -183,7 +24,8 @@ static int run_shmif_server(
 	flags = fcntl(fdin, F_GETFL);
 	fcntl(fdin, F_SETFL, flags | O_NONBLOCK);
 
-/* repeatedly open the same connection point */
+/* repeatedly open the same connection point, then depending on if we are in piped
+ * mode (single client) or socketed mode we fork off a server */
 	while(true){
 		struct shmifsrv_client* cl =
 			shmifsrv_allocate_connpoint(cp, NULL, S_IRWXU, &fd, &sc, 0);
@@ -197,7 +39,8 @@ static int run_shmif_server(
 			fd = shmifsrv_client_handle(cl);
 
 		if (-1 == fd){
-			fprintf(stderr, "descriptor allocator failed, couldn't open connection point\n");
+			fprintf(stderr,
+				"descriptor allocator failed, couldn't open connection point\n");
 			return EXIT_FAILURE;
 		}
 
@@ -213,7 +56,8 @@ static int run_shmif_server(
 				shmifsrv_poll(cl);
 
 /* build the a12 state and hand it over to the main loop */
-				server_mode(cl, a12_channel_open(authk, auth_sz), fdin, fdout);
+				a12helper_a12cl_shmifsrv(a12_channel_open(
+					authk, auth_sz), cl, fdin, fdout, (struct a12helper_opts){});
 			}
 
 			if (pfd.revents & (~POLLIN)){
@@ -230,157 +74,17 @@ static int run_shmif_server(
 	return EXIT_SUCCESS;
 }
 
-struct client_state {
-	struct arcan_shmif_cont* wnd;
-	struct a12_state* state;
-};
-
-static void on_cl_event(int chid, struct arcan_event* ev, void* tag)
-{
-	struct client_state* cs = tag;
-	debug_print(2, "client event: %s on ch %d",
-		arcan_shmif_eventstr(ev, NULL, 0), chid);
-	if (chid != 0){
-		fprintf(stderr, "Multi-channel support not yet finished\n");
-		return;
-	}
-
-	arcan_shmif_enqueue(cs->wnd, ev);
-}
-
 static int run_shmif_client(
 	uint8_t* authk, size_t authk_sz, int fdin, int fdout)
 {
-	struct arcan_shmif_cont wnd =
-		arcan_shmif_open(SEGID_UNKNOWN, SHMIF_NOACTIVATE, NULL);
-
-#ifdef DUMP_IN
-	FILE* fpek_in = fopen("netpipe.cl.in", "w+");
-#endif
-
 	struct a12_state* ast = a12_channel_build(authk, authk_sz);
 	if (!ast){
-		fprintf(stderr, "Couldn't allocate Client state machine\n");
+		fprintf(stderr, "Couldn't allocate client state machine\n");
 		return EXIT_FAILURE;
 	}
 
-	a12_set_destination(ast, &wnd, 0);
-
-	struct client_state cs = {
-		.wnd = &wnd,
-		.state = ast
-	};
-
-/* set to non-blocking */
-	int flags = fcntl(fdin, F_GETFL);
-	fcntl(fdin, F_SETFL, flags | O_NONBLOCK);
-
-	struct pollfd fds[] = {
-		{ .fd = wnd.epipe, .events = c_inev },
-		{	.fd = fdin, .events = c_inev },
-		{ .fd = fdout, .events = c_outev },
-	};
-
-	uint8_t* outbuf;
-	size_t outbuf_sz = 0;
-	debug_print(1, "(cl) got proxy connection, waiting for source");
-
-	bool alive = true;
-	while (alive){
-/* first, flush current outgoing and/or swap buffers */
-		int np = 2;
-		if (outbuf_sz || (outbuf_sz = a12_channel_flush(ast, &outbuf))){
-			ssize_t nw = write(fdout, outbuf, outbuf_sz);
-#ifdef DUMP_OUT
-			if (nw > 0){
-				static uint8_t seqn;
-				char fn[sizeof("out_cl_xxx.raw")];
-				sprintf(fn, "out_cl_%"PRIu8".raw", seqn++);
-				FILE* outf = fopen(fn, "w+");
-				fwrite(outbuf, 1, nw, outf);
-				fclose(outf);
-			}
-#endif
-			if (nw > 0){
-				outbuf += nw;
-				outbuf_sz -= nw;
-			}
-/* short-write? expand pollset and try again later */
-			if (outbuf_sz)
-				np = 3;
-		}
-
-/* events from parent, nothing special - unless the carry a descriptor */
-		int sv = poll(fds, np, -1);
-
-		if (sv < 0){
-			if (sv == -1 && errno != EAGAIN && errno != EINTR)
-				alive = false;
-			continue;
-		}
-
-		if (np == 3 && sv && fds[2].revents){
-			if ((fds[2].revents & (~POLLOUT))){
-				alive = false;
-				continue;
-			}
-		}
-
-		if (sv && fds[0].revents){
-			if ((fds[0].revents & (~POLLIN))){
-				alive = false;
-				continue;
-			}
-
-			struct arcan_event newev;
-			int sc;
-			while (( sc = arcan_shmif_poll(&wnd, &newev)) > 0){
-				debug_print(2, "(cl) incoming event: %s",
-					arcan_shmif_eventstr(&newev, NULL, 0));
-
-/* we got a descriptor passing event, some of these we could/should discard,
- * while others need to be forwarded as a binary- chunk stream and kept out-
- * of order on the other side */
-				if (arcan_shmif_descrevent(&newev)){
-
-					debug_print(1, "(cl) ignoring descripting passing event");
-				}
-				else
-					a12_channel_enqueue(ast, &newev);
-			}
-/* FIXME: send disconnect packet */
-			if (-1 == sc){
-				alive = false;
-				continue;
-			}
-		}
-
-/* flush data-in and feed to state machine */
-		if (sv && fds[1].revents){
-			if (!(fds[1].revents & POLLIN)){
-				alive = false;
-				continue;
-			}
-
-			uint8_t buf[9000];
-			ssize_t nr;
-			if ((nr = read(fds[1].fd, buf, 9000)) > 0){
-#ifdef DUMP_IN
-				fwrite(buf, 1, nr, fpek_in);
-				fflush(fpek_in);
-#endif
-				a12_channel_unpack(ast, buf, nr, &cs, on_cl_event);
-			}
-		}
-	}
-
-#ifdef DUMP_IN
-	fclose(fpek_in);
-#endif
-	arcan_shmif_drop(&wnd);
-	return EXIT_SUCCESS;
+	return a12helper_a12srv_shmifcl(ast, NULL, fdin, fdout);
 }
-
 
 static int killpipe[] = {-1, -1};
 static void test_handler()
@@ -459,21 +163,6 @@ int main(int argc, char** argv)
 				authk_sz = fread(authk, 1, 64, fpek);
 				fclose(fpek);
 			}
-		}
-		else if (strcmp(argv[i], "-v") == 0){
-			i++;
-			if (i == argc)
-				return show_usage(argv[i], "no method specified");
-			if (strcmp(argv[i], "rgb") == 0)
-				vframe_method = VFRAME_METHOD_RAW_NOALPHA;
-			else if (strcmp(argv[i], "rgb565") == 0)
-				vframe_method = VFRAME_METHOD_RAW_RGB565;
-			else if (strcmp(argv[i], "dpng") == 0)
-				vframe_method = VFRAME_METHOD_DPNG;
-			else if (strcmp(argv[i], "h264") == 0)
-				vframe_method = VFRAME_METHOD_H264;
-			else
-				return show_usage(argv[i], "unknown video compression method requested");
 		}
 		else if (strcmp(argv[i], "-s") == 0){
 			i++;

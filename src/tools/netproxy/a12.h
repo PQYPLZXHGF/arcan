@@ -60,11 +60,12 @@ a12_channel_close(struct a12_state*);
  * the channel. Any received events will be pushed via the callback.
  */
 void a12_channel_unpack(
-	struct a12_state*, const uint8_t*, size_t, void* tag,
-	void (*on_event)(int chid, struct arcan_event*, void*));
+	struct a12_state*, const uint8_t*, size_t, void* tag, void (*on_event)
+		(struct arcan_shmif_cont* wnd, int chid, struct arcan_event*, void*));
 
 /*
- * Set the specified context as the recipient of audio/video buffers.
+ * Set the specified context as the recipient of audio/video buffers
+ * for a specific channel id.
  */
 void a12_set_destination(
 	struct a12_state*, struct arcan_shmif_cont* wnd, int chid);
@@ -74,10 +75,9 @@ void a12_set_destination(
  * this needs to be rate-limited by the caller in order for events and data
  * streams to be interleaved and avoid a poor user experience.
  *
- * Unless flushed >often< in response to unpack/enqueue/signal, this will
- * grow and buffer until there's no more data to be had. Internally, a12
- * double-buffers and a12_channel_flush act as a buffer swap. The typical
- * use is therefore:
+ * Unless flushed >often< in response to unpack/enqueue/signal, this will grow
+ * and buffer until there's no more data to be had. Internally, a12 n-buffers
+ * and a12_channel_flush act as a buffer step. The typical use is therefore:
  *
  * 1. [build state machine, open or accept]
  * while active:
@@ -99,12 +99,19 @@ int
 a12_channel_poll(struct a12_state*);
 
 /*
- * forward an event over the channel, any associated descriptors etc. will be
- * taken over by the channel, and it is responsible for closing them on
- * completion.
+ * Forward an event over the channel, any associated descriptors etc.
+ * will be taken over by the channel, and it is responsible for closing
+ * them on completion.
  */
 void
 a12_channel_enqueue(struct a12_state*, struct arcan_event*);
+
+/*
+ * For sessions that support multiplexing operations for multiple
+ * channels, switch the active encoded channel to the specified ID.
+ */
+int
+a12_channel_setid(struct a12_state*, int chid);
 
 /*
  * forward a vbuffer from shm

@@ -76,6 +76,8 @@ set(SOURCES
 	a12.c
 	a12_decode.c
 	a12_encode.c
+	a12_helper_srv.c
+	a12_helper_cl.c
 	miniz/miniz.c
 )
 

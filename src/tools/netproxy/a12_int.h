@@ -184,7 +184,7 @@ struct a12_state {
 	int in_channel;
 
 /*
- * incoming buffer
+ * incoming buffer, size of the buffer == size of the type
  */
 	uint8_t decode[65536];
 	uint16_t decode_pos;
@@ -199,8 +199,6 @@ struct a12_state {
 
 /* when the channel has switched to a streamcipher, this is set to true */
 	bool in_encstate;
-
-	uint32_t canary;
 };
 
 void a12int_append_out(

@@ -79,6 +79,13 @@ int shmifsrv_client_handle(struct shmifsrv_client* cl)
 	return cl->con->dpipe;
 }
 
+enum ARCAN_SEGID shmifsrv_client_type(struct shmifsrv_client* cl)
+{
+	if (!cl || !cl->con)
+		return SEGID_UNKNOWN;
+	return cl->con->segid;
+}
+
 struct shmifsrv_client*
 	shmifsrv_send_subsegment(struct shmifsrv_client* cl, int segid,
 	size_t init_w, size_t init_h, int reqid, uint32_t idtok)

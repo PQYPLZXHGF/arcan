@@ -25,7 +25,7 @@ Milestone 1 - basic features (0.5.x)
 - [x] Basic API
 - [x] Control
 - [x] Netpipe
-- [ ] Raw binary descriptor transfers
+- [x] Raw binary descriptor transfers
 - [ ] Client multiplexing
 - [ ] arcan-netproxy (TCP)
 - [x] Uncompressed Video / Video delta
@@ -42,6 +42,7 @@ Milestone 2 - closer to useful (0.6.x)
 - [ ] Quad-tree for DPNG
 - [ ] "MJPG" mode over DPNG
 - [ ] TUI- text channel
+  - [ ] Local echo prediction
 - [ ] A / V / E interleaving
 - [ ] Progressive encoding
 - [ ] Accelerated encoding of gpu-handles

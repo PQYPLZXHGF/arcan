@@ -302,6 +302,11 @@ static void command_binarystream(struct a12_state* S)
 
 }
 
+static void command_audioframe(struct a12_state* S)
+{
+
+}
+
 static void command_videoframe(struct a12_state* S)
 {
 	uint8_t channel = S->decode[16];
@@ -444,19 +449,20 @@ static void process_control(struct a12_state* S)
 }
 
 static void process_event(struct a12_state* S,
-	void* tag, void (*on_event)(int chid, struct arcan_event*, void*))
+	void* tag, void (*on_event)(struct arcan_shmif_cont* wnd, int chid, struct arcan_event*, void*))
 {
 	if (!process_mac(S))
 		return;
 
 	struct arcan_event aev;
 	unpack_u64(&S->last_seen_seqnr, S->decode);
+
 	if (-1 == arcan_shmif_eventunpack(
 		&S->decode[SEQUENCE_NUMBER_SIZE], S->decode_pos - SEQUENCE_NUMBER_SIZE, &aev)){
 		debug_print(1, "broken event packet received");
 	}
 	else if (on_event)
-		on_event(0, &aev, tag);
+		on_event(NULL, 0, &aev, tag);
 
 	reset_state(S);
 }
@@ -538,7 +544,8 @@ static void process_video(struct a12_state* S)
 
 static void process_audio(struct a12_state* S)
 {
-/* FIXME: header-stage then frame-stage, decode into context based on channel */
+/* FIXME: header-stage then frame-stage, decode into context based on channel,
+ * just copy what is done in process video really */
 }
 
 static void process_binary(struct a12_state* S)
@@ -547,7 +554,8 @@ static void process_binary(struct a12_state* S)
  * and read full first */
 }
 
-void a12_set_destination(struct a12_state* S, struct arcan_shmif_cont* wnd, int chid)
+void a12_set_destination(
+	struct a12_state* S, struct arcan_shmif_cont* wnd, int chid)
 {
 	if (!S){
 		debug_print(1, "invalid set_destination call");
@@ -564,9 +572,9 @@ void a12_set_destination(struct a12_state* S, struct arcan_shmif_cont* wnd, int 
 }
 
 void
-a12_channel_unpack(struct a12_state* S,
-	const uint8_t* buf, size_t buf_sz,
-	void* tag, void (*on_event)(int chid, struct arcan_event*, void*))
+a12_channel_unpack(struct a12_state* S, const uint8_t* buf,
+	size_t buf_sz, void* tag, void (*on_event)
+	(struct arcan_shmif_cont*, int chid, struct arcan_event*, void*))
 {
 	if (S->state == STATE_BROKEN)
 		return;
@@ -765,8 +773,12 @@ a12_channel_enqueue(struct a12_state* S, struct arcan_event* ev)
  * size and can just throw it in a memory buffer by queueing
  * it outright */
 			if (ev->tgt.ioevs[0].iv != -1){
-				transfer_fd = ev->tgt.ioevs[0].iv;
+				transfer_fd = arcan_shmif_dupfd(ev->tgt.ioevs[0].iv, -1, false);
 				transfer_sz = get_file_size(transfer_fd);
+				if (transfer_sz <= 0){
+					debug_print(1, "ignoring font-transfer, couldn't resolve source");
+					return;
+				}
 			}
 			break;
 			case TARGET_COMMAND_NEWSEGMENT:
