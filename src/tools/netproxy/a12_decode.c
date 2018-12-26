@@ -288,7 +288,6 @@ void a12int_unpack_vbuffer(struct a12_state* S,
 
 	cvf->inbuf_sz -= S->decode_pos;
 	if (cvf->inbuf_sz == 0){
-		fprintf(stderr, "done, commit? %d\n", cvf->commit);
 		debug_print(2, "video frame completed, commit:%"PRIu8, cvf->commit);
 		if (cvf->commit){
 			arcan_shmif_signal(cont, SHMIF_SIGVID);

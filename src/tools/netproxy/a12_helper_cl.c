@@ -27,16 +27,22 @@ struct cl_state {
 static void on_cl_event(
 	struct arcan_shmif_cont* cont, int chid, struct arcan_event* ev, void* tag)
 {
-	debug_print(2, "client event: %s on ch %d",
-		arcan_shmif_eventstr(ev, NULL, 0), chid);
-
+	if (!cont){
+		debug_print(1, "ignore incoming event on unknown context");
+		return;
+	}
+	if (arcan_shmif_descrevent(ev)){
 /*
  * Events needed to be handled here:
  * NEWSEGMENT, map it, add it to the context channel list.
  */
-
-	if (cont)
+		debug_print(1, "incoming descr- event ignored");
+	}
+	else {
+		debug_print(2, "client event: %s on ch %d",
+			arcan_shmif_eventstr(ev, NULL, 0), chid);
 		arcan_shmif_enqueue(cont, ev);
+	}
 }
 
 int a12helper_a12srv_shmifcl(
@@ -61,6 +67,8 @@ int a12helper_a12srv_shmifcl(
 		debug_print(1, "Couldn't connect to an arcan display server");
 		return -ENOENT;
 	}
+	cl_state.n_segments = 1;
+	debug_print(1, "Segment connected");
 
 	a12_set_destination(S, &cl_state.wnd[0], 0);
 
@@ -70,10 +78,12 @@ int a12helper_a12srv_shmifcl(
 
 	uint8_t* outbuf;
 	size_t outbuf_sz = 0;
-	debug_print(1, "(cl) got proxy connection, waiting for source");
+	debug_print(1, "got proxy connection, waiting for source");
 
 	int status;
-	while ((status = a12helper_poll_triple(cl_state.wnd[0].epipe, fd_in, fd_out, 4))){
+	while (-1 != (status = a12helper_poll_triple(
+		cl_state.wnd[0].epipe, fd_in, outbuf_sz ? fd_out : -1, 4))){
+
 		if (status & A12HELPER_WRITE_OUT){
 			if (outbuf_sz || (outbuf_sz = a12_channel_flush(S, &outbuf))){
 				ssize_t nw = write(fd_out, outbuf, outbuf_sz);
@@ -88,6 +98,7 @@ int a12helper_a12srv_shmifcl(
 			uint8_t inbuf[9000];
 			ssize_t nr = read(fd_in, inbuf, 9000);
 			if (-1 == nr && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR){
+				debug_print(1, "failed to read from input: %d", errno);
 				break;
 			}
 
@@ -104,21 +115,29 @@ int a12helper_a12srv_shmifcl(
 			struct arcan_event newev;
 			int sc;
 			while (( sc = arcan_shmif_poll(&cl_state.wnd[i], &newev)) > 0){
-				debug_print(1, "(cl:%zu) event: %s",
-					i, arcan_shmif_eventstr(&newev, NULL, 0));
-
 /* we got a descriptor passing event, some of these we could/should discard,
  * while others need to be forwarded as a binary- chunk stream and kept out-
  * of order on the other side */
 				if (arcan_shmif_descrevent(&newev)){
-					debug_print(1, "(cl) ignoring descriptor passing event");
+					debug_print(1, "(cl:%zu) ign-descr-event: %s",
+						i, arcan_shmif_eventstr(&newev, NULL, 0));
 				}
-				else
+				else {
+					debug_print(2, "enqueue %s", arcan_shmif_eventstr(&newev, NULL, 0));
 					a12_channel_enqueue(S, &newev);
+				}
 			}
+		}
+
+/* we might have gotten data to flush, so use that as feedback */
+		if (!outbuf_sz){
+			outbuf_sz = a12_channel_flush(S, &outbuf);
+			if (outbuf_sz)
+				debug_print(2, "output buffer size: %zu", outbuf_sz);
 		}
 	}
 
+/* though a proper cleanup would cascade, it doesn't help being careful */
 	for (size_t i = 0, count = cl_state.n_segments; i < 256 && count; i++){
 		if (!cl_state.wnd[i].addr)
 				continue;

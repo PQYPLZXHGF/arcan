@@ -44,7 +44,7 @@
 #define ASHMIF_VERSION_MINOR 11
 
 #ifndef LOG
-#define LOG(...) (fprintf(stderr, __VA_ARGS__))
+#define LOG(...) ({fprintf(stderr, __VA_ARGS__); fflush(stderr);})
 #endif
 
 /* pt size as 1/72th inch */

@@ -454,6 +454,8 @@ static void process_event(struct a12_state* S,
 	if (!process_mac(S))
 		return;
 
+	uint8_t channel = S->decode[16];
+
 	struct arcan_event aev;
 	unpack_u64(&S->last_seen_seqnr, S->decode);
 
@@ -461,8 +463,10 @@ static void process_event(struct a12_state* S,
 		&S->decode[SEQUENCE_NUMBER_SIZE], S->decode_pos - SEQUENCE_NUMBER_SIZE, &aev)){
 		debug_print(1, "broken event packet received");
 	}
-	else if (on_event)
-		on_event(NULL, 0, &aev, tag);
+	else if (on_event){
+		debug_print(2, "unpack event to %d", channel);
+		on_event(S->channels[channel].cont, 0, &aev, tag);
+	}
 
 	reset_state(S);
 }

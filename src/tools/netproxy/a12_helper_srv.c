@@ -44,7 +44,7 @@ static struct a12_vframe_opts vopts_from_segment(
 	case SEGID_VM:
 	default:
 		return (struct a12_vframe_opts){
-			.method = VFRAME_METHOD_DPNG
+			.method = VFRAME_METHOD_NORMAL
 		};
 	break;
 	}
@@ -99,8 +99,9 @@ static void on_srv_event(
 	struct shmifsrv_client* cs = tag;
 	debug_print(2,
 		"client event: %s on ch %d", arcan_shmif_eventstr(ev, NULL, 0), chid);
+
 	if (chid != 0){
-		fprintf(stderr, "Multi-channel support not yet finished\n");
+		debug_print(1, "couldn't decode incoming event, invalid channel: %d", chid);
 		return;
 	}
 
@@ -117,8 +118,8 @@ void a12helper_a12cl_shmifsrv(struct a12_state* S,
 	size_t outbuf_sz = 0;
 	int status;
 
-	while ((status = a12helper_poll_triple(
-		shmifsrv_client_handle(C), fd_in, fd_out, 4)) >= 0){
+	while (-1 != (status = a12helper_poll_triple(
+		shmifsrv_client_handle(C), fd_in, outbuf_sz ? fd_out : -1, 4))){
 
 /* first, flush current outgoing and/or swap buffers */
 		if (status & A12HELPER_WRITE_OUT){
@@ -143,25 +144,26 @@ void a12helper_a12cl_shmifsrv(struct a12_state* S,
 			a12_channel_unpack(S, inbuf, nr, C, on_srv_event);
 		}
 
-		if (status & A12HELPER_POLL_SHMIF){
-		}
-
-		struct arcan_event newev;
-		while (shmifsrv_dequeue_events(C, &newev, 1)){
-			debug_print(2, "forward event: %s",
-				arcan_shmif_eventstr(&newev, NULL, 0));
-			if (arcan_shmif_descrevent(&newev)){
-				debug_print(1, "(srv) ignoring descriptor passing event");
+/* always poll shmif- when we are here */
+		struct arcan_event ev;
+		while (shmifsrv_dequeue_events(C, &ev, 1)){
+			if (arcan_shmif_descrevent(&ev)){
+				debug_print(1, "ignoring descriptor passing event");
 			}
-			else if (!shmifsrv_process_event(C, &newev)){
-				a12_channel_enqueue(S, &newev);
+			else if (!shmifsrv_process_event(C, &ev)){
+				debug_print(2, "forward: %s", arcan_shmif_eventstr(&ev, NULL, 0));
+				a12_channel_enqueue(S, &ev);
 			}
+			else
+				debug_print(1, "consumed: %s", arcan_shmif_eventstr(&ev, NULL, 0));
 		}
 
 		int pv;
 		while ((pv = shmifsrv_poll(C)) != CLIENT_NOT_READY){
+			debug_print(1, "client polled to %d", pv);
 			if (pv == CLIENT_DEAD){
 /* FIXME: shmif-client died, send disconnect packages so we do this cleanly */
+				debug_print(1, "client died");
 				goto out;
 			}
 			if (pv & CLIENT_VBUFFER_READY){
@@ -174,6 +176,7 @@ void a12helper_a12cl_shmifsrv(struct a12_state* S,
 			 .tgt.kind = TARGET_COMMAND_BUFFER_FAIL
 	 };
  */
+				debug_print(2, "video-buffer");
 				struct shmifsrv_vbuffer vb = shmifsrv_video(C);
 				a12_channel_vframe(S, 0, &vb, vopts_from_segment(C, vb));
 				shmifsrv_video_step(C);
@@ -182,6 +185,12 @@ void a12helper_a12cl_shmifsrv(struct a12_state* S,
 				debug_print(2, "audio-buffer");
 				shmifsrv_audio(C, NULL, NULL);
 			}
+		}
+
+		if (!outbuf_sz){
+			outbuf_sz = a12_channel_flush(S, &outbuf);
+			if (outbuf_sz)
+				debug_print(1, "pass over, got: %zu left", outbuf_sz);
 		}
 	}
 

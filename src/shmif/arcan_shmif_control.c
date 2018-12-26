@@ -292,7 +292,7 @@ static void consume(struct arcan_shmif_cont* c)
 	if (!c->priv->pev.consumed)
 		return;
 
-		LOG("(shmif) acquire: %d, %d, %d, %d\n",
+		DLOG("(shmif) acquire: %d, %d, %d, %d\n",
 			c->priv->pev.fd,
 			c->priv->pev.ev.category,
 			c->priv->pev.ev.tgt.kind,
@@ -301,7 +301,7 @@ static void consume(struct arcan_shmif_cont* c)
 
 	if (BADFD != c->priv->pev.fd){
 		close(c->priv->pev.fd);
-		LOG("(shmif) closing unhandled/ignored/dup:ed state descriptor (%d)\n",
+		DLOG("(shmif) closing unhandled/ignored/dup:ed state descriptor (%d)\n",
 			c->priv->pev.fd);
 	}
 
@@ -318,7 +318,7 @@ static void consume(struct arcan_shmif_cont* c)
 			c->priv->pev.ev.category == EVENT_TARGET &&
 			c->priv->pev.ev.tgt.kind == TARGET_COMMAND_NEWSEGMENT &&
 			c->priv->pev.ev.tgt.ioevs[2].iv == SEGID_DEBUG){
-			LOG("debug subsegment received\n");
+			DLOG("debug subsegment received\n");
 			struct arcan_shmif_cont pcont = arcan_shmif_acquire(c,NULL,SEGID_DEBUG,0);
 			if (pcont.addr){
 				if (!arcan_shmif_debugint_spawn(&pcont)){
@@ -331,7 +331,7 @@ static void consume(struct arcan_shmif_cont* c)
 
 		close(c->priv->pseg.epipe);
 		c->priv->pseg.epipe = BADFD;
-		LOG("(shmif) closing unhandled / ignored subsegment descriptor\n");
+		DLOG("(shmif) closing unhandled / ignored subsegment descriptor\n");
 	}
 
 	c->priv->pev.fd = BADFD;
@@ -455,10 +455,10 @@ static enum shmif_migrate_status fallback_migrate(
 	switch (sv){
 	case SHMIF_MIGRATE_NOCON: break;
 	case SHMIF_MIGRATE_BADARG:
-		LOG("(shmif) recover process failed, broken alternate- path/key\n");
+		DLOG("(shmif) recover process failed, broken alternate- path/key\n");
 	break;
 	case SHMIF_MIGRATE_TRANSFER_FAIL:
-		LOG("(shmif) the migration process failed during setup, can't recover\n");
+		DLOG("(shmif) the migration process failed during setup, can't recover\n");
 	break;
 
 /* set a reset event in the "to be dispatched next dequeue" slot */
@@ -538,13 +538,13 @@ checkfd:
 			priv->pev.fd = arcan_fetchhandle(c->epipe, blocking);
 
 		if (priv->pev.gotev){
-			LOG("(shmif) waiting for descriptor from %d parent (%d:%d)\n",
+			DLOG("(shmif) waiting for descriptor from %d parent (%d:%d)\n",
 				c->epipe, priv->pev.fd, blocking);
 			if (priv->pev.fd != BADFD){
 				fd_event(c, dst);
 				rv = 1;
 			}
-			else if (blocking){ LOG("(shmif) blocking fd wait failed, %s\n", strerror(errno));}
+			else if (blocking){ DLOG("(shmif) blocking fd wait failed, %s\n", strerror(errno));}
 			goto done;
 		}
 	} while (priv->pev.gotev && *ks && c->addr->dms);
@@ -625,6 +625,7 @@ checkfd:
  * interest to override default font */
 			case TARGET_COMMAND_FONTHINT:
 				if (dst->tgt.ioevs[1].iv == 1){
+					DLOG("(shmif) received fonthint with a descriptor, waiting for it\n");
 					priv->pev.gotev = true;
 					goto checkfd;
 				}
@@ -693,7 +694,7 @@ checkfd:
 			case TARGET_COMMAND_BCHUNK_IN:
 			case TARGET_COMMAND_BCHUNK_OUT:
 			case TARGET_COMMAND_NEWSEGMENT:
-				LOG("(shmif) got descriptor transfer related event\n");
+				DLOG("(shmif) got descriptor transfer related event\n");
 				priv->pev.gotev = true;
 				priv->pev.ev = *dst;
 				goto checkfd;
