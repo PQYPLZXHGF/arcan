@@ -40,11 +40,16 @@ static struct a12_vframe_opts vopts_from_segment(
 			.bias = VFRAME_BIAS_QUALITY
 		};
 	break;
+	case SEGID_CURSOR:
+		return (struct a12_vframe_opts){
+			.method = VFRAME_METHOD_NORMAL
+		};
+	break;
 	case SEGID_REMOTING:
 	case SEGID_VM:
 	default:
 		return (struct a12_vframe_opts){
-			.method = VFRAME_METHOD_NORMAL
+			.method = VFRAME_METHOD_DPNG
 		};
 	break;
 	}
@@ -58,11 +63,25 @@ int a12helper_poll_triple(int fd_shmif, int fd_in, int fd_out, int timeout)
 		{	.fd = fd_in, .events = c_inev },
 		{ .fd = fd_out, .events = c_outev }
 	};
+	size_t n_fds = 3;
 
-	int sv = poll(fds, fd_out != -1 ? 3 : 2, timeout);
+/* only poll or out if we have something to write */
+	if (fd_out == -1)
+		n_fds = 2;
+
+/* posix 'should' allow the same descriptor used multiple times, but the
+ * support seems to be somewhat varying */
+	if (fd_in == fd_out){
+		n_fds = 2;
+		fds[1].events |= c_outev;
+	}
+
+	int sv = poll(fds, n_fds, timeout);
 	if (sv < 0){
-		if (sv == -1 && errno != EAGAIN && errno != EINTR)
+		if (sv == -1 && errno != EAGAIN && errno != EINTR){
+			debug_print(1, "poll failure: %s", strerror(errno));
 			return -1;
+		}
 	}
 
 	if (fds[0].revents & (POLLERR | POLLNVAL | POLLHUP)){
@@ -75,7 +94,8 @@ int a12helper_poll_triple(int fd_shmif, int fd_in, int fd_out, int timeout)
 		return -1;
 	}
 
-	if (fd_out != -1 && (fds[2].revents & (POLLERR | POLLNVAL | POLLHUP))){
+	if (fd_out != -1 && fd_in != fd_out &&
+		(fds[2].revents & (POLLERR | POLLNVAL | POLLHUP))){
 		debug_print(1, "outgoing descriptor died");
 		return -1;
 	}
@@ -87,7 +107,9 @@ int a12helper_poll_triple(int fd_shmif, int fd_in, int fd_out, int timeout)
 	if (fds[1].revents & POLLIN)
 		res |= A12HELPER_DATA_IN;
 
-	if (fd_out != -1 && (fds[2].revents & POLLOUT))
+	if (fd_in == fd_out && (fds[1].revents & POLLOUT))
+		res |= A12HELPER_WRITE_OUT;
+	else if (fd_out != -1 && (fds[2].revents & POLLOUT))
 		res |= A12HELPER_WRITE_OUT;
 
 	return res;
@@ -117,6 +139,8 @@ void a12helper_a12cl_shmifsrv(struct a12_state* S,
 	uint8_t* outbuf;
 	size_t outbuf_sz = 0;
 	int status;
+
+/* missing: this doesn't actually invoke timer ticks etc. */
 
 	while (-1 != (status = a12helper_poll_triple(
 		shmifsrv_client_handle(C), fd_in, outbuf_sz ? fd_out : -1, 4))){
@@ -166,27 +190,33 @@ void a12helper_a12cl_shmifsrv(struct a12_state* S,
 				debug_print(1, "client died");
 				goto out;
 			}
-			if (pv & CLIENT_VBUFFER_READY){
-/* two option, one is to map the dma-buf ourselves and do the readback,
- * or with streams map the stream and convert to h264 on gpu, but easiest
- * now is to just reject and let the caller do the readback */
-/*
- * arcan_event ev = {
-	     .category = EVENT_TARGET,
-			 .tgt.kind = TARGET_COMMAND_BUFFER_FAIL
-	 };
- */
+
+/* This one is subtle! we actually defer the frame release until anything pending
+ * has been flushed. This is not the right solution when there is big items from
+ * state and so on in flight. The real mechanism here could/should be able to
+ * take type into account and balance queue and encoding parameters based on net-
+ * load */
+
+			if (!outbuf_sz && (pv & CLIENT_VBUFFER_READY)){
+/* two option, one is to map the dma-buf ourselves and do the readback, or with
+ * streams map the stream and convert to h264 on gpu, but easiest now is to
+ * just reject and let the caller do the readback. this is currently done by
+ * default in shmifsrv.*/
 				debug_print(2, "video-buffer");
 				struct shmifsrv_vbuffer vb = shmifsrv_video(C);
 				a12_channel_vframe(S, 0, &vb, vopts_from_segment(C, vb));
 				shmifsrv_video_step(C);
 			}
+
+/* the previous mentioned problem also means that audio can saturate video
+ * processing, both need to go through the same conductor- kind of analysis */
 			if (pv & CLIENT_ABUFFER_READY){
 				debug_print(2, "audio-buffer");
 				shmifsrv_audio(C, NULL, NULL);
 			}
 		}
 
+/* recheck for an output- buffer */
 		if (!outbuf_sz){
 			outbuf_sz = a12_channel_flush(S, &outbuf);
 			if (outbuf_sz)

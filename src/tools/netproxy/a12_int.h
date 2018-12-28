@@ -65,7 +65,7 @@ enum control_commands {
 #define SEQUENCE_NUMBER_SIZE 8
 
 #ifdef _DEBUG
-#define DEBUG 2
+#define DEBUG 1
 #else
 #define DEBUG 0
 #endif

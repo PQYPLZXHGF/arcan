@@ -148,7 +148,7 @@ static bool fd_avail(int fd, bool* term)
 	*term = false;
 
 	if (-1 == sv){
-		if (errno != EINTR)
+		if (errno != EINTR && errno != EAGAIN)
 			*term = true;
 
 		return false;

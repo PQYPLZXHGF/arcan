@@ -225,7 +225,6 @@ static void autoclock_frame(arcan_frameserver* tgt)
 	*/
 }
 
-
 bool shmifsrv_enqueue_event(
 	struct shmifsrv_client* cl, struct arcan_event* ev, int fd)
 {

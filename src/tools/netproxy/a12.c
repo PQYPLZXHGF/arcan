@@ -158,6 +158,14 @@ static struct a12_state* a12_setup(uint8_t* authk, size_t authk_sz)
 	if (!res)
 		return NULL;
 
+/* the authk- argument setup should really be reworked */
+	uint8_t empty_key[16] = {0};
+	size_t empty_sz = 16;
+	if (!authk){
+		authk = empty_key;
+		authk_sz = empty_sz;
+	}
+
 	*res = (struct a12_state){};
 	if (-1 == blake2bp_init_key(&res->mac_init, 16, authk, authk_sz)){
 		DYNAMIC_FREE(res);

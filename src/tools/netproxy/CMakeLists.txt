@@ -45,7 +45,9 @@ endif()
 
 include(ExternalProject)
 
-#ExternalProject_Add(udt
+# ExternalProject_Add(udt
+# UDT as carrier is something we'll avoid for now.
+#
 #	SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/udt"
 #	UPDATE_COMMAND ""
 #	GIT_REPOSITORY  "https://github.com/letoram/UDT"
@@ -79,22 +81,21 @@ set(SOURCES
 	a12_helper_srv.c
 	a12_helper_cl.c
 	miniz/miniz.c
+	../../platform/posix/random.c
+	../../platform/posix/chacha20.c
 )
 
 add_executable( arcan-netpipe ${SOURCES} netpipe.c)
-#add_executable( arcan-net ${SOURCES} netproxy.cpp)
-#add_dependencies( arcan-net udt )
+add_executable( arcan-netproxy ${SOURCES} netproxy.c)
 add_sanitizers( arcan-netpipe )
-#add_sanitizers( arcan-net )
+add_sanitizers( arcan-netproxy )
 
-#set_property(TARGET arcan-net PROPERTY CXX_STANDARD 11)
 set_property(TARGET arcan-netpipe PROPERTY C_STANDARD 11)
+set_property(TARGET arcan-netproxy PROPERTY C_STANDARD 11)
 
-# target_link_libraries(arcan-net ${LIBRARIES}
-#	${CMAKE_CURRENT_BINARY_DIR}/udt-prefix/src/udt-build/libudt.a
-#)
 target_link_libraries(arcan-netpipe ${LIBRARIES})
+target_link_libraries(arcan-netproxy ${LIBRARIES})
 
 install(TARGETS
-	#arcan-net
-	arcan-netpipe DESTINATION bin)
+	arcan-netproxy arcan-netpipe
+	DESTINATION bin)

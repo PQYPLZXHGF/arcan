@@ -12,8 +12,26 @@ managed unencrypted over FIFOs that the caller manages. The more complex
 netproxy is currently built on TCP as a transport layer and do symmetric
 encryption and authentication using pre-shared credentials.
 
-Netpipe is primarily used for local development and testing, while proxy
-has not yet evolved to a sufficient standard.
+# Compilation
+
+For proper video encoding, the ffmpeg libraries (libavcodec, libswscale,
+...) are required and must have h264 support. Due to patent or licensing
+issues that may or may not apply, check you distribution and build.
+
+If ffmpeg reports errors, is missing or is missing h264 support entirely
+the system will fallback to raw- or only lightly- compressed buffers.
+
+# Use / Testing
+
+The easiest way to test on a local system that already has arcan and one
+WM running with a terminal that has the ARCAN\_CONNPATH environment:
+
+    arcan-netpipe -T
+		ARCAN_CONNPATH=test /path/to/some/arcan_client
+
+For use on the display server side:
+
+    arcan-netproxy -l
 
 # Todo
 
@@ -24,10 +42,9 @@ Milestone 1 - basic features (0.5.x)
 
 - [x] Basic API
 - [x] Control
-- [x] Netpipe
+- [x] Netpipe (FIFO)
+- [x] netproxy (TCP)
 - [x] Raw binary descriptor transfers
-- [ ] Client multiplexing
-- [ ] arcan-netproxy (TCP)
 - [x] Uncompressed Video / Video delta
 - [ ] Uncompressed Audio / Audio delta
 - [x] Compressed Video
@@ -73,17 +90,17 @@ integrity or availability. As can be seen in the todo list, this won't remain
 the case but there are other priorities to sort out first.
 
 For arcan-netpipe, you are expected to provide it through whatever tunneling
-mechanism you chose.
+mechanism you chose - ssh is a good choice.
 
 For arcan-netproxy, you are currently restricted to symmetric primitives
-derived from the password expected to be provided on stdin.
+derived from the password expected to be provided as env or on stdin.
 
 # Hacking
 To get a grasp of the codebase, the major components to understand is on
 the server side the "a12\_channel\_unpack" function. This function takes
 care of buffering, authentication, decryption and dispatch. It is stateful,
 and based on the current state it will forward a completed larger chunk
-to the corresponding process_(xxx) function.
+to the corresponding process\_(xxx) function.
 
 For sending/prividing output, first build the appropriate control packet
 for the basic command. When such a buffer is finished, send to the

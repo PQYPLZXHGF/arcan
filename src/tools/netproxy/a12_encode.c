@@ -326,18 +326,18 @@ static struct compress_res compress_deltaz(struct a12_state* S, uint8_t ch,
 	uint8_t* compress_in;
 	size_t compress_in_sz = 0;
 	struct shmifsrv_vbuffer* ab = &S->channels[ch].acc;
-	static int count = 0;
 
 /* reset the accumulation buffer so that we rebuild the normal frame */
-	if (ab->w != vb->w || ab->h != vb->h || count++ > 5){
+	if (ab->w != vb->w || ab->h != vb->h){
+		debug_print(1, "deltaz, dimension mismatch: %zu*%zu <->%zu*%zu",
+			(size_t) ab->w, (size_t) ab->h, (size_t) vb->w, (size_t) vb->h);
 		free(ab->buffer);
 		free(S->channels[ch].compression);
 		ab->buffer = NULL;
 		S->channels[ch].compression = NULL;
-		count = 0;
 	}
 
-/* first or reset run, build accumulation buffer and copy */
+/* first, reset or no-delta mode, build accumulation buffer and copy */
 	if (!ab->buffer){
 		type = POSTPROCESS_VIDEO_MINIZ;
 		*ab = *vb;
@@ -383,7 +383,8 @@ static struct compress_res compress_deltaz(struct a12_state* S, uint8_t ch,
  * and store ^ b. For smaller regions, we might want to do something simpler
  * like RLE only. The flags (,0) can be derived with the _zip helper */
 	else {
-		debug_print(2, "dpng, delta frame");
+		debug_print(2, "build delta frame @(%zu,%zu)+(%zu,%zu)",
+			(size_t)*w, (size_t)*h, (size_t) *x, (size_t) *y);
 		compress_in = S->channels[ch].compression;
 		uint8_t* acc = (uint8_t*) ab->buffer;
 		for (size_t cy = (*y); cy < (*y)+(*h); cy++){
@@ -626,6 +627,8 @@ void a12int_encode_h264(PACK_ARGS)
 			debug_print(1, "couldn't setup h264 encoder");
 			drop_videnc(S, chid, true);
 		}
+		else
+			debug_print(1, "%d switched to h264", chid);
 	}
 
 /* on failure, just fallback and retry alloc on dimensions change */
